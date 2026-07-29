@@ -1,5 +1,7 @@
 export enum TweetStatus {
   SCHEDULED = 'scheduled',
+  /** Claimed by the scheduler, X API call in flight. Transient. */
+  POSTING = 'posting',
   POSTED = 'posted',
   FAILED = 'failed'
 }

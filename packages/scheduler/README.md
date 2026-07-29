@@ -1,121 +1,79 @@
 # Tweet Poster Service
 
-This service runs periodically to check for and post scheduled tweets to X (formerly Twitter). It's built with TypeScript and uses a cron-based scheduler with automatic token refresh capabilities.
+The `simplytweeted-cron` Cloudflare Worker. A Cron Trigger fires it every minute; it posts any tweets that have come due.
 
 ## Features
 
-- **Automatic Scheduling**: Uses cron jobs to periodically check for due tweets
-- **Batch Processing**: Groups tweets by user for efficient processing
-- **Token Management**: Validates and automatically refreshes Twitter API tokens when needed
-- **Error Handling**: Comprehensive error handling with detailed logging
-- **Database Integration**: Uses the same MongoDB database as simply-tweeted-app to manage tweet status and user accounts
-- **Development Tools**: Supports single-run mode for testing and debugging
+- **Cron Trigger**: Cloudflare invokes `scheduled()` every minute — no long-running process
+- **Batch Processing**: Groups due tweets by user so each user's token is refreshed at most once per run
+- **Token Management**: Refreshes X OAuth 2.0 access tokens just before expiry and persists the rotated pair
+- **Double-post protection**: Each tweet is claimed with a conditional `UPDATE` before the X API call, so overlapping runs cannot post it twice
+- **Error Handling**: Failures mark the individual tweet `failed` and leave the rest of the batch alone
+- **Database Integration**: Shares the `simplytweeted` D1 database with the web Worker
 
 ## Architecture
 
-The service is organized into modular components:
+- `index.ts` — the `scheduled()` handler; finds due tweets, groups them by user
+- `logger.ts` — structured JSON logging over `console.*` (picked up by Workers Logs)
+- `xApi.ts` — X API v2 over `fetch`: token refresh and tweet posting
+- `tweetProcessor.ts` — per-user posting logic and status transitions
 
-- `index.ts` - Main entry point with cron scheduling and graceful shutdown
-- `config.ts` - Environment configuration management
-- `logger.ts` - Structured logging with Pino (development-friendly output)
-- `tokenManager.ts` - Twitter API token management with auto-refresh
-- `tweetProcessor.ts` - Core tweet processing and posting logic
+Configuration lives in `wrangler.jsonc` (cron schedule, D1 binding, compatibility flags) rather than in environment variables.
 
 ## Setup
 
-1. Install dependencies:
+1. Install dependencies from the repo root:
    ```bash
    npm install
    ```
 
-2. Create a `.env` file with your configuration:
-   ```env
-   # Database Configuration
-   MONGODB_URI=mongodb://localhost:27017
-   DB_ENCRYPTION_KEY=your_encryption_key_here
-   
-   # Cron Schedule (default: every minute)
-   CRON_SCHEDULE=* * * * *
-   
-   # Twitter/X API credentials for OAuth 2.0
-   AUTH_TWITTER_ID=your_twitter_client_id
-   AUTH_TWITTER_SECRET=your_twitter_client_secret
-   TWITTER_API_KEY=your_twitter_api_key
-   TWITTER_API_SECRET=your_twitter_api_secret
-   
-   # Environment (optional, defaults to development)
-   NODE_ENV=production
-   ```
-
-3. Build the TypeScript code:
+2. Build the shared library:
    ```bash
-   npm run build
+   npm run build --workspace=shared-lib
    ```
 
-## Running the Service
+3. Create `.dev.vars` for local runs:
+   ```bash
+   cp .dev.vars.example .dev.vars
+   ```
+   `DB_ENCRYPTION_KEY` must match the web Worker's value, or stored OAuth tokens cannot be decrypted.
 
-### Production Mode
-```bash
-npm start
-```
+4. Point `wrangler.jsonc` at your D1 database by replacing `REPLACE_WITH_DATABASE_ID` with the same `database_id` used by `packages/simply-tweeted-app/wrangler.jsonc`.
 
-### Development Mode
+## Running
+
+Local dev server:
+
 ```bash
 npm run dev
 ```
 
-### Single Run (Testing)
-Will run the tweet posting logic only once, not starting the cron
+Cron Triggers do not fire on their own locally. Trigger a run by hand:
+
 ```bash
-npm run dev:once
+curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"
 ```
 
-### Debug Mode
+Typecheck:
+
 ```bash
-npm run dev:debug
+npm run check
 ```
 
-## How It Works
+Deploy:
 
-1. **Cron Scheduler**: The service runs on a configurable cron schedule (default: every minute)
-2. **Tweet Discovery**: Finds tweets with `status=scheduled` and `scheduledDate` in the past
-3. **User Grouping**: Groups tweets by user to minimize API calls and token refreshes
-4. **Account Validation**: For each user, validates their Twitter account and token
-5. **Token Refresh**: Automatically refreshes expired tokens using the refresh token
-6. **Tweet Posting**: Posts each tweet to Twitter using the v2 API
-7. **Status Updates**: Updates tweet status in the database to either `posted` or `failed`
+```bash
+npm run deploy
+```
 
-## Token Management
+Secrets in production are set with `wrangler secret put`: `DB_ENCRYPTION_KEY`, `AUTH_TWITTER_ID`, `AUTH_TWITTER_SECRET`.
 
-The service uses Twitter's OAuth 2.0 with automatic token refresh and secure token handling:
-- **Token Decryption**: Safely decrypts stored user tokens from the database before use
-- **Automatic Refresh**: Access tokens are automatically refreshed when expired
-- **Secure Storage**: Refresh tokens are stored encrypted in the shared MongoDB database
-- **Database Updates**: Token updates are logged and saved back to the database
-- **Error Recovery**: Failed token refreshes are logged for debugging
+## Tweet lifecycle
 
-## Logging
+```
+scheduled ──(claimTweet)──► posting ──(X API 2xx)──► posted
+                               │
+                               └──(error)──────────► failed
+```
 
-The service uses structured logging with Pino:
-- **Development**: Pretty-printed, colorized output with timestamps
-- **Production**: Structured JSON logs for analysis
-- **Log Levels**: Debug, info, warn, error, and fatal
-- **Contextual Data**: Includes user IDs, tweet IDs, and error details
-
-## Error Handling
-
-- **Database Errors**: Graceful handling of MongoDB connection issues
-- **API Errors**: Twitter API errors are caught and logged
-- **Token Errors**: Automatic retry with token refresh
-- **Batch Failures**: Individual tweet failures don't stop the entire batch
-- **Graceful Shutdown**: Handles SIGINT and SIGTERM signals
-
-## Dependencies
-
-## Database
-
-The scheduler service connects to the same MongoDB database used by the main simply-tweeted-app:
-- **Shared Database**: Uses the same database instance and collections as the web application
-- **Encrypted Data**: User tokens and sensitive data are stored with encryption
-- **Status Tracking**: Tweet statuses are updated in real-time as they are processed
-- **User Accounts**: Retrieves user authentication data including encrypted Twitter tokens 
+A `posting` row left behind by an interrupted run is reclaimed automatically after 5 minutes.

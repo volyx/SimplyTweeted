@@ -1,0 +1,14 @@
+# Copy to .dev.vars for `wrangler dev`. In production these are set with
+# `wrangler secret put <NAME>` — never commit real values.
+
+# openssl rand -base64 32
+AUTH_SECRET=
+# openssl rand -base64 32 — must match the scheduler Worker's value
+DB_ENCRYPTION_KEY=
+
+# X/Twitter OAuth 2.0 app credentials
+AUTH_TWITTER_ID=
+AUTH_TWITTER_SECRET=
+
+# Comma-separated X usernames permitted to sign in
+ALLOWED_TWITTER_ACCOUNTS=

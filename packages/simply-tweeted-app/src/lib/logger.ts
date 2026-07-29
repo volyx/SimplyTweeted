@@ -1,35 +1,43 @@
-import pino from 'pino';
 import { dev } from '$app/environment';
 
-// Create logger instance with environment-based configuration
-const logger = pino({
-  name: 'simply-tweeted-app',
-  level: dev ? 'debug' : 'info',
-  transport: dev
-    ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'yyyy-mm-dd HH:MM:ss',
-          ignore: 'pid,hostname'
-        }
-      }
-    : undefined,
-  // In production, use structured JSON logging
-  formatters: {
-    level: (label) => ({ level: label }),
-    log: (object) => ({ ...object })
-  },
-  timestamp: () => `,"time":"${new Date().toISOString()}"`
-});
+/**
+ * Client/universal logger. pino's Node transports work in neither the browser
+ * nor a Worker, so this is a thin console wrapper with the same call signature.
+ */
+type Fields = object | undefined;
 
-export default logger;
+function replacer(_key: string, value: unknown) {
+	if (value instanceof Error) {
+		return { name: value.name, message: value.message, stack: value.stack };
+	}
+	return value;
+}
 
-// Export convenience methods
+function emit(level: string, message: string, extra?: Fields) {
+	// Match pino's old behaviour: debug is dropped outside development.
+	if (level === 'debug' && !dev) return;
+
+	const entry = {
+		level,
+		name: 'simply-tweeted-app',
+		time: new Date().toISOString(),
+		msg: message,
+		...(extra ?? {})
+	};
+	const line = JSON.stringify(entry, replacer);
+	if (level === 'error' || level === 'fatal') {
+		console.error(line);
+	} else if (level === 'warn') {
+		console.warn(line);
+	} else {
+		console.log(line);
+	}
+}
+
 export const log = {
-  debug: (message: string, extra?: object) => logger.debug(extra, message),
-  info: (message: string, extra?: object) => logger.info(extra, message),
-  warn: (message: string, extra?: object) => logger.warn(extra, message),
-  error: (message: string, extra?: object) => logger.error(extra, message),
-  fatal: (message: string, extra?: object) => logger.fatal(extra, message)
-}; 
+	debug: (message: string, extra?: Fields) => emit('debug', message, extra),
+	info: (message: string, extra?: Fields) => emit('info', message, extra),
+	warn: (message: string, extra?: Fields) => emit('warn', message, extra),
+	error: (message: string, extra?: Fields) => emit('error', message, extra),
+	fatal: (message: string, extra?: Fields) => emit('fatal', message, extra)
+};

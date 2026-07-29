@@ -6,7 +6,8 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"preview": "vite preview",
+		"preview": "npm run build && wrangler dev --persist-to ../../.wrangler-state",
+		"deploy": "npm run build && wrangler deploy",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -14,8 +15,8 @@
 		"lint": "prettier --check ."
 	},
 	"devDependencies": {
-		"@sveltejs/adapter-auto": "^6.0.0",
-		"@sveltejs/adapter-node": "^5.2.12",
+		"@cloudflare/workers-types": "^4.20250510.0",
+		"@sveltejs/adapter-cloudflare": "^7.0.0",
 		"@sveltejs/kit": "^2.16.0",
 		"@sveltejs/vite-plugin-svelte": "^5.0.0",
 		"@tailwindcss/vite": "^4.1.7",
@@ -26,18 +27,14 @@
 		"svelte-check": "^4.0.0",
 		"tailwindcss": "^4.1.7",
 		"typescript": "^5.0.0",
-		"vite": "^6.2.6"
+		"vite": "^6.2.6",
+		"wrangler": "^4.16.0"
 	},
 	"dependencies": {
 		"@auth/sveltekit": "^1.9.2",
-		"@types/node": "^22.15.18",
 		"daisyui": "^5.0.35",
 		"date-fns-tz": "^3.2.0",
 		"emoji-picker-element": "^1.26.3",
-		"install": "^0.13.0",
-		"mongodb": "^6.16.0",
-		"npm": "^11.4.0",
-		"pino": "^9.7.0",
-		"pino-pretty": "^13.0.0"
+		"shared-lib": "file:../shared-lib"
 	}
 }

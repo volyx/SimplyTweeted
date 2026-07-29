@@ -1,0 +1,34 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "simplytweeted-web",
+	"main": ".svelte-kit/cloudflare/_worker.js",
+	"compatibility_date": "2025-05-01",
+	// nodejs_compat covers both node:crypto (shared-lib token encryption) and the
+	// AsyncLocalStorage that backs SvelteKit's $env/dynamic/private on Workers.
+	"compatibility_flags": ["nodejs_compat"],
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".svelte-kit/cloudflare"
+	},
+	// Custom domain. The volyx.in zone must be on this Cloudflare account; wrangler
+	// creates the DNS record and edge certificate on first deploy.
+	"routes": [
+		{
+			"pattern": "twitter.volyx.in",
+			"custom_domain": true
+		}
+	],
+	// Same database_id as packages/scheduler/wrangler.jsonc — one D1, two bindings.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "simplytweeted",
+			"database_id": "109e7fcc-c198-47cf-a976-a87d15c40697"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+	// Secrets (wrangler secret put): AUTH_SECRET, DB_ENCRYPTION_KEY,
+	// AUTH_TWITTER_ID, AUTH_TWITTER_SECRET, ALLOWED_TWITTER_ACCOUNTS
+}

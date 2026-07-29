@@ -1,0 +1,9 @@
+# Copy to .dev.vars for `wrangler dev`. In production these are set with
+# `wrangler secret put <NAME>` — never commit real values.
+
+# Must match the web Worker's DB_ENCRYPTION_KEY, or stored tokens cannot be decrypted.
+DB_ENCRYPTION_KEY=
+
+# X/Twitter OAuth 2.0 app credentials (same app as the web Worker)
+AUTH_TWITTER_ID=
+AUTH_TWITTER_SECRET=

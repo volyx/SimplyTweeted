@@ -16,118 +16,126 @@ https://github.com/user-attachments/assets/a221680c-684f-41ae-99dd-5b5624675ab4
 - **📱 Responsive Design**: Works seamlessly on desktop and mobile devices
 
 
-## How to selfhost Simply Tweeted
+## How to host Simply Tweeted on Cloudflare
 
-Simply Tweeted can be easily self-hosted using Docker. You have two options for the database: use an existing MongoDB instance or self-host MongoDB alongside the application.
+Simply Tweeted runs entirely on the **Cloudflare Workers free plan**: two Workers (the web app and the scheduler) sharing one D1 database. No servers, no containers, no MongoDB.
 
-### Quick Start (Using External MongoDB)
+### What you need
 
-**💡 Tip**: You can use [MongoDB](https://www.mongodb.com) which offers a free tier, perfect if you don't want to self-host MongoDB.
+- A free [Cloudflare account](https://dash.cloudflare.com/sign-up)
+- **Node.js 20+** and npm
+- An X (Twitter) developer application — see [Setting Up X (Twitter) Developer Application](#setting-up-x-twitter-developer-application)
 
-#### 1. Create X Developer Application
-
-First, you'll need to create an X (Twitter) developer application to get your API credentials. Follow the detailed guide in the [Setting Up X (Twitter) Developer Application](#setting-up-x-twitter-developer-application) section below.
-
-#### 2. Pull the Docker Image
+### 1. Clone and install
 
 ```bash
-docker pull ghcr.io/timotme/simplytweeted:latest
+git clone https://github.com/timotme/SimplyTweeted.git
+cd SimplyTweeted
+npm install
+npx wrangler login
 ```
 
-#### 3. Create Environment File
-
-Create a `.env` file with your configuration:
+### 2. Create the D1 database
 
 ```bash
-# Authentication
-AUTH_SECRET=your_auth_secret_key # Generate with `openssl rand -base64 64`
-AUTH_URL=https://your-domain.com # Your public domain
-AUTH_TRUST_HOST=true
-
-# Database
-DB_ENCRYPTION_KEY=your_encryption_key_for_tokens # Generate with `openssl rand -base64 64`
-MONGODB_URI=mongodb://username:password@your-mongodb-host:27017/simplyTweeted
-
-# Twitter API
-AUTH_TWITTER_ID=your_twitter_client_id
-AUTH_TWITTER_SECRET=your_twitter_client_secret
-
-# Security
-ALLOWED_TWITTER_ACCOUNTS=your_twitter_username,another_username # Comma-separated list
-
-# Host Settings
-ORIGIN=https://your-domain.com # Full URL as seen in browser
-PORT=3000
+npx wrangler d1 create simplytweeted
 ```
 
-#### 4. Run the Container
+Copy the printed `database_id` into **both** `packages/simply-tweeted-app/wrangler.jsonc` and `packages/scheduler/wrangler.jsonc`, replacing `REPLACE_WITH_DATABASE_ID`. Both Workers must point at the same database.
+
+Then apply the schema:
 
 ```bash
-docker run -d \
-  --name simply-tweeted \
-  -p 3000:3000 \
-  --env-file .env \
-  ghcr.io/timotme/simplytweeted:latest
+npm run db:migrate
 ```
 
-### Complete Self-Hosted Setup (Including MongoDB)
+### 3. Set the secrets
 
-If you want to self-host MongoDB as well, use the provided Docker Compose configuration:
-
-#### 1. Get the Docker Compose Files
+Generate two random values first:
 
 ```bash
-# Download the docker-compose.yml and environment template
-curl https://raw.githubusercontent.com/timotme/SimplyTweeted/main/deployment/prod/self-hosted/docker-compose.yml
+openssl rand -base64 32   # AUTH_SECRET
+openssl rand -base64 32   # DB_ENCRYPTION_KEY
 ```
 
-#### 2. Create Environment File
-
-Create a `.env.docker` file in the same directory:
+Web Worker:
 
 ```bash
-# Authentication
-AUTH_SECRET=your_auth_secret_key # Generate with `openssl rand -base64 32`
-AUTH_URL=https://your-domain.com
-AUTH_TRUST_HOST=true
-
-# Database (for self-hosted MongoDB)
-DB_ENCRYPTION_KEY=your_encryption_key_for_tokens # Generate with `openssl rand -base64 32`
-MONGODB_URI=mongodb://root:example@mongo:27017/simplyTweeted
-
-# Twitter API
-AUTH_TWITTER_ID=your_twitter_client_id
-AUTH_TWITTER_SECRET=your_twitter_client_secret
-
-# Security
-ALLOWED_TWITTER_ACCOUNTS=your_twitter_username,another_username
-
-# Host Settings
-ORIGIN=https://your-domain.com
-PORT=3000
+cd packages/simply-tweeted-app
+npx wrangler secret put AUTH_SECRET
+npx wrangler secret put DB_ENCRYPTION_KEY
+npx wrangler secret put AUTH_TWITTER_ID
+npx wrangler secret put AUTH_TWITTER_SECRET
+npx wrangler secret put ALLOWED_TWITTER_ACCOUNTS   # comma-separated X usernames
 ```
 
-#### 3. Start the Services
+Scheduler Worker:
 
 ```bash
-docker-compose up -d
+cd ../scheduler
+npx wrangler secret put DB_ENCRYPTION_KEY          # must match the web Worker's value
+npx wrangler secret put AUTH_TWITTER_ID
+npx wrangler secret put AUTH_TWITTER_SECRET
 ```
 
-This will start both MongoDB and Simply Tweeted. The application will be available on port 3000, and MongoDB will be accessible on port 27018 (mapped from internal 27017).
+> ⚠️ `DB_ENCRYPTION_KEY` must be identical for both Workers. It decrypts the stored OAuth tokens — if they differ, the scheduler cannot post.
 
-### Important Notes
+### 4. Deploy
 
-- **Twitter API Setup**: Make sure to configure your Twitter App's OAuth callback URL to match your domain
-- **Security**: Use strong, randomly generated secrets for `AUTH_SECRET` and `DB_ENCRYPTION_KEY`
-- **Firewall**: Only expose port 3000 to the internet; keep MongoDB port (27018) internal
-- **Backup**: Regular database backups are recommended for production use
-- **SSL**: Use a reverse proxy (like Nginx) with SSL certificates for production deployments
+```bash
+cd ../..
+npm run deploy
+```
 
-### Production Considerations
+This builds `shared-lib`, deploys `simplytweeted-web`, and deploys `simplytweeted-cron` with its every-minute Cron Trigger.
 
-For production deployments, consider:
-- Using a reverse proxy (Nginx/Traefik) with SSL termination
-- Setting up automated backups for MongoDB
+### 5. Custom domain
+
+`packages/simply-tweeted-app/wrangler.jsonc` binds the web Worker to **`twitter.volyx.in`**:
+
+```jsonc
+"routes": [
+  { "pattern": "twitter.volyx.in", "custom_domain": true }
+]
+```
+
+On first deploy Wrangler creates the DNS record and provisions the edge certificate — no manual DNS entry needed. The only prerequisite is that the `volyx.in` zone is on the same Cloudflare account you logged into with `wrangler login`.
+
+Certificate issuance usually takes a minute or two; until it completes the domain may serve a TLS error. Check status with:
+
+```bash
+npx wrangler deployments status
+```
+
+To use a different domain, change the `pattern`. To drop the custom domain entirely, remove the `routes` block and fall back to the `workers.dev` URL.
+
+### 6. Point X at your Worker
+
+Add the callback to your X app's OAuth 2.0 settings:
+
+```
+https://twitter.volyx.in/auth/callback/twitter
+```
+
+The Worker also stays reachable at `https://simplytweeted-web.<your-subdomain>.workers.dev`. Auth.js derives its callback from the incoming request host, so if you want sign-in to work on that URL too, register its callback as well — or set `"workers_dev": false` in `wrangler.jsonc` to make the custom domain the only entry point.
+
+Visit https://twitter.volyx.in, sign in with an account listed in `ALLOWED_TWITTER_ACCOUNTS`, and schedule a tweet.
+
+### Free plan limits
+
+Everything below is comfortably within the free tier for personal use:
+
+| Resource | Free plan | What this app uses |
+|---|---|---|
+| Worker requests | 100,000/day | Your page views + 1,440 cron ticks/day |
+| CPU time | 10 ms per invocation | SSR of a page; the cron is almost entirely I/O |
+| D1 storage | 5 GB | Kilobytes |
+| D1 rows read / written | 5M / 100k per day | Hundreds |
+| Cron Triggers | 5 per account | 1 |
+
+The real ceiling is X itself: the free X API tier allows roughly **17 posts per 24 hours**.
+
+If you ever exceed the 10 ms CPU limit on SSR, the fix is the $5/month Workers Paid plan — no architecture change is needed.
 
 ## Tech Stack
 
@@ -138,107 +146,128 @@ For production deployments, consider:
 - **DaisyUI**: Beautiful component library
 
 ### Backend
-- **Node.js** - Runtime environment
-- **MongoDB** - Database for storing tweets and user data
-- **Twitter API v2** - Official X (Twitter) API integration
+- **Cloudflare Workers** - Serverless runtime
+- **Cloudflare D1** - SQLite database for tweets and user accounts
+- **X API v2** - Called directly over `fetch`
 
 ### Infrastructure
-- **Docker** - Containerized deployment
-- **Node-cron** - Automated scheduling service
+- **Cloudflare Cron Triggers** - Runs the poster every minute
+- **Wrangler** - Build and deploy tooling
 
 ## Architecture
 
-This is a monorepo containing three main packages:
+A monorepo of three packages, deployed as **two Workers sharing one D1 database**:
 
-- **`simply-tweeted-app`**: The main web application (SvelteKit)
-- **`scheduler`**: Background service for posting scheduled tweets
-- **`shared-lib`**: Shared TypeScript utilities and database models
+- **`simply-tweeted-app`** → the `simplytweeted-web` Worker. SvelteKit SSR plus static assets, built with `@sveltejs/adapter-cloudflare`. Handles sign-in and the UI, and writes scheduled tweets to D1.
+- **`scheduler`** → the `simplytweeted-cron` Worker. Exports only a `scheduled()` handler, fired every minute by a Cron Trigger. Reads due tweets from D1, refreshes the user's OAuth token if needed, and posts to X.
+- **`shared-lib`**: shared types, the D1 data access layer, and AES-256-GCM encryption for OAuth tokens at rest.
+
+```
+                  ┌──────────────────────┐
+   browser ─────► │  simplytweeted-web   │ ─┐
+                  │  (fetch handler)     │  │
+                  └──────────────────────┘  │   ┌─────────────┐
+                                            ├──►│   D1 DB     │
+                  ┌──────────────────────┐  │   │ simplytweeted│
+   cron ────────► │  simplytweeted-cron  │ ─┘   └─────────────┘
+   (every min)    │  (scheduled handler) │ ───► X API v2
+                  └──────────────────────┘
+```
+
+Why two Workers rather than one: the stock SvelteKit Cloudflare adapter emits a fetch-only Worker with no way to add a `scheduled()` handler. Splitting them keeps the adapter unmodified and isolates the cron's CPU budget from page rendering.
 
 
 ## Getting Started
 
 
-### Local Developement
+### Local Development
 
 **Requirements:**
-- **Node.js 18+** - JavaScript runtime environment
+- **Node.js 20+** - JavaScript runtime environment
 - **npm** - Package manager
-- **Docker** - For running MongoDB locally
 - **X (Twitter) Developer Account** - Required for API access and OAuth integration
 
-#### 1. Clone the Repository
+Everything runs locally against a local D1 database — no Cloudflare account needed until you deploy.
+
+#### 1. Clone and install
 
 ```bash
-git clone https://github.com/yourusername/SimplyTweeted.git
+git clone https://github.com/timotme/SimplyTweeted.git
 cd SimplyTweeted
-```
-
-#### 2. Install Dependencies
-
-```bash
 npm install
 ```
 
-#### 3. Start MongoDB
+#### 2. Environment setup
+
+Local secrets go in `.dev.vars` (gitignored), not `.env`. Each Worker package ships a template:
 
 ```bash
-cd deployment/dev
-docker-compose up -d
+cp packages/simply-tweeted-app/.dev.vars.example packages/simply-tweeted-app/.dev.vars
+cp packages/scheduler/.dev.vars.example packages/scheduler/.dev.vars
 ```
 
+Fill both in. `DB_ENCRYPTION_KEY` must be the same in each.
 
-#### 4. Environment Setup
-
-Create the same environement file in the `scheduler` and `simply-tweeted-app` package:
-
-**Create `.env`:**
-```bash
-# Authentication
-AUTH_SECRET=your_auth_secret_key # Generate with `openssl rand -base64 32`
-AUTH_URL=http://localhost:3000 # Base URL for authentication callbacks
-
-# Database
-DB_ENCRYPTION_KEY=your_encryption_key_for_tokens # Generate with `openssl rand -base64 32`
-MONGODB_URI=mongodb://root:your_secure_password@localhost:27017/simplyTweeted
-
-# Twitter API
-AUTH_TWITTER_ID=your_twitter_client_id
-AUTH_TWITTER_SECRET=your_twitter_client_secret
-
-# Security
-ALLOWED_TWITTER_ACCOUNTS=your_twitter_username,another_username # List of account allowed to access the scheduler separated by a comma
-
-# Host setting
-ORIGIN=http://localhost:3000 # Full URL as seen in the browser
-PORT=3000 # Port on which the web app will be exposed
-```
-
-
-#### 5. Build Shared Library
+#### 3. Build the shared library
 
 ```bash
 npm run build --workspace=shared-lib
 ```
 
-#### 6. Start Development Servers
-This will run the front-end.
+#### 4. Create the local database
+
 ```bash
-npm run dev --workspace=simply-tweeted-app
-```
-This will run the scheduler once
-```bash
-npm run dev runOnce  --workspace=tweet-poster-service
+npm run db:migrate:local
 ```
 
-This will run the service concurently
+This creates a local SQLite database under `.wrangler-state/`, shared by both Workers.
+
+#### 5. Start the dev servers
+
+Web app (Vite, hot reload — but no D1 binding):
+
 ```bash
 npm run dev
 ```
 
+Web app as a real Worker, with the D1 binding and secrets wired up:
+
+```bash
+npm run preview --workspace=simply-tweeted-app
+```
+
+Scheduler:
+
+```bash
+npm run dev:cron
+```
+
+Cron Triggers do not fire automatically in local dev. Fire one by hand:
+
+```bash
+curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"
+```
 
 The app will be available at:
-- **Web App**: http://localhost:5173
-- **Scheduler**: Runs in background
+- **Web app (Vite)**: http://localhost:5173
+- **Web app (Worker)**: http://localhost:8787
+- **Scheduler**: http://localhost:8787 (`/__scheduled` only)
+
+Add `http://localhost:5173/auth/callback/twitter` to your X app's callback URLs so sign-in works locally.
+
+#### Inspecting the local database
+
+```bash
+cd packages/simply-tweeted-app
+npx wrangler d1 execute simplytweeted --local --persist-to ../../.wrangler-state \
+  --command "SELECT id, status, scheduledDate FROM tweets"
+```
+
+#### Typechecking
+
+```bash
+npm run check
+```
 
 
 ## Configuration
@@ -253,11 +282,12 @@ The app will be available at:
 
 ### Database Schema
 
-The application uses MongoDB with collections for:
-- Users and authentication sessions
-- Scheduled tweets
-- Tweet history and analytics
-- User preferences
+Cloudflare D1 (SQLite), two tables — see [`migrations/0001_init.sql`](migrations/0001_init.sql):
+
+- **`tweets`** — one row per scheduled tweet: content, `scheduledDate` (epoch ms, UTC), community, and a `status` of `scheduled` → `posting` → `posted` / `failed`.
+- **`accounts`** — one row per user per OAuth provider, unique on `(userId, provider)`. The `access_token` and `refresh_token` columns are encrypted at rest with AES-256-GCM.
+
+Timestamps are stored as integer epoch milliseconds; the data layer converts them to `Date` on the way out.
 
 ## 🤝 Contributions Welcome!
 
@@ -285,16 +315,23 @@ We love contributions from the community! Whether you're fixing bugs, adding new
 ### Code Structure
 
 ```
+migrations/
+└── 0001_init.sql           # D1 schema
 packages/
-├── simply-tweeted-app/     # Main web application
+├── simply-tweeted-app/     # "simplytweeted-web" Worker
+│   ├── wrangler.jsonc      # Bindings, assets, compatibility flags
 │   ├── src/routes/         # SvelteKit routes
-│   ├── src/lib/           # Shared components and utilities
-│   └── src/auth.ts        # Authentication configuration
-├── scheduler/             # Tweet posting service
-│   └── src/      # Main scheduler logic
-└── shared-lib/            # Shared utilities and types
-    ├── src/types/         # TypeScript type definitions
-    └── src/database/      # Database models and utilities
+│   ├── src/lib/server/     # env accessors, D1 client factory, logger
+│   └── src/auth.ts         # Auth.js config (lazy, per-request)
+├── scheduler/              # "simplytweeted-cron" Worker
+│   ├── wrangler.jsonc      # Cron Trigger + D1 binding
+│   └── src/
+│       ├── index.ts        # scheduled() handler
+│       ├── tweetProcessor.ts  # Claim, post, update status
+│       └── xApi.ts         # X API v2 over fetch (token refresh + post)
+└── shared-lib/             # Shared utilities and types
+    ├── src/types/          # TypeScript type definitions
+    └── src/backend/        # D1 data access + token encryption
 ```
 
 ## License
@@ -342,13 +379,13 @@ Once your developer account is approved:
    - Enable **"Request email address from users"** if you want email access
 3. **Authentication Settings**:
    - **App Type**: Set to "Web App"
-   - **Callback URLs**: Add your domain callback:
+   - **Callback URLs**: Add your deployed Worker's callback:
      ```
-     https://your-domain.com/auth/callback/twitter
+     https://twitter.volyx.in/auth/callback/twitter
      ```
      For local development, also add:
      ```
-     http://localhost:3000/auth/callback/twitter
+     http://localhost:5173/auth/callback/twitter
      ```
    - **Website URL**: Add your application's URL (this is not important)
 
@@ -372,7 +409,7 @@ Simply Tweeted uses OAuth 2.0 for authentication. You only need the OAuth 2.0 Cl
 
 ### Common Issues
 
-- **Callback URL Mismatch**: Ensure your `AUTH_URL` environment variable matches the callback URL in your X app
+- **Callback URL Mismatch**: Ensure the URL you are visiting matches a callback URL registered in your X app. Auth.js derives the callback from the incoming request host (`trustHost: true`), so `workers.dev` and any custom domain each need their own entry.
 - **Permission Denied**: Verify your app has "Read and write" permissions
 - **Invalid Credentials**: Double-check your `AUTH_TWITTER_ID` and `AUTH_TWITTER_SECRET`
 

@@ -1,0 +1,24 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "simplytweeted-cron",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-05-01",
+	// node:crypto (used by shared-lib's AES-256-GCM token encryption) needs this.
+	"compatibility_flags": ["nodejs_compat"],
+	// Cloudflare's minimum interval is 1 minute, matching the old CRON_SCHEDULE default.
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
+	// Same database_id as packages/simply-tweeted-app/wrangler.jsonc — one D1, two bindings.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "simplytweeted",
+			"database_id": "109e7fcc-c198-47cf-a976-a87d15c40697"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+	// Secrets (wrangler secret put): DB_ENCRYPTION_KEY, AUTH_TWITTER_ID, AUTH_TWITTER_SECRET
+}

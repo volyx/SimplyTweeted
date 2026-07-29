@@ -1,6 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import type { Actions, RequestEvent } from '@sveltejs/kit';
-import { getDbInstance } from '$lib/server/db';
+import { getDb } from '$lib/server/db';
 import { TweetStatus, type Tweet, getAvailableCommunities } from 'shared-lib';
 import { fromZonedTime } from 'date-fns-tz';
 import { log } from '$lib/server/logger.js';
@@ -46,7 +46,7 @@ export const load = async (event: RequestEvent) => {
 };
 
 export const actions: Actions = {
-	default: async ({ request, locals }) => {
+	default: async ({ request, locals, platform }) => {
 		const session = await locals.auth();
 		
 		if (!session || !session.user) {
@@ -92,7 +92,7 @@ export const actions: Actions = {
 				createdAt: new Date() // This is also UTC
 			};
 			
-			await getDbInstance().saveTweet(tweet);
+			await getDb(platform).saveTweet(tweet);
 			success = true;
 		} catch (error) {
 			log.error('Failed to save tweet:', { userId: session.user.id, content, error });

@@ -22,11 +22,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "mongodb": "^5.0.0" 
-  },
   "devDependencies": {
     "typescript": "^5.0.0",
-    "@types/node": "^20.0.0" 
+    "@types/node": "^20.0.0",
+    "@cloudflare/workers-types": "^4.20250510.0"
   }
 } 

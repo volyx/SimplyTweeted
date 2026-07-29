@@ -1,18 +1,18 @@
-import { MONGODB_URI, DB_ENCRYPTION_KEY } from '$lib/server/env';
+import { DB_ENCRYPTION_KEY } from '$lib/server/env';
 import { DatabaseClient } from 'shared-lib/backend';
 
-// Create a lazy-loaded singleton pattern
-let dbInstance: DatabaseClient | null = null;
-
-export function getDbInstance(): DatabaseClient {
-    if (!dbInstance) {
-        dbInstance = DatabaseClient.getInstance(MONGODB_URI, DB_ENCRYPTION_KEY);
-    }
-    return dbInstance;
+/**
+ * Build a DatabaseClient for the current request from the D1 binding.
+ *
+ * Deliberately not a singleton: D1 has no connection to pool, and caching a
+ * client in module scope would outlive the request whose bindings it captured.
+ */
+export function getDb(platform: App.Platform | undefined): DatabaseClient {
+	const db = platform?.env?.DB;
+	if (!db) {
+		throw new Error(
+			'D1 binding "DB" is unavailable. Check d1_databases in wrangler.jsonc, and that this code runs inside a request.'
+		);
+	}
+	return new DatabaseClient(db, DB_ENCRYPTION_KEY());
 }
-
-export const initializeDatabase = async (): Promise<DatabaseClient> => {
-    const db = getDbInstance();
-    await db.connect();
-    return db;
-};

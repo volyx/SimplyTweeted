@@ -1,11 +1,11 @@
 import { error, redirect } from '@sveltejs/kit';
-import { getDbInstance } from '$lib/server/db';
+import { getDb } from '$lib/server/db';
 import { TweetStatus } from 'shared-lib';
 import { log } from '$lib/server/logger.js';
 
 const TWEETS_PER_PAGE = 10;
 
-export const load = (async ({ locals, url }) => {
+export const load = (async ({ locals, url, platform }) => {
 	const session = await locals.auth();
 	if (!session?.user?.id) {
 		throw redirect(303, '/signin');
@@ -14,9 +14,10 @@ export const load = (async ({ locals, url }) => {
 	const page = Number(url.searchParams.get('page')) || 1;
 
 	try {
+		const db = getDb(platform);
 		const [tweets, totalTweets] = await Promise.all([
-			getDbInstance().getTweets(userId, page, TWEETS_PER_PAGE, [TweetStatus.POSTED, TweetStatus.FAILED], -1),
-			getDbInstance().countTweets(userId, [TweetStatus.POSTED, TweetStatus.FAILED])
+			db.getTweets(userId, page, TWEETS_PER_PAGE, [TweetStatus.POSTED, TweetStatus.FAILED], -1),
+			db.countTweets(userId, [TweetStatus.POSTED, TweetStatus.FAILED])
 		]);
 
 		return {

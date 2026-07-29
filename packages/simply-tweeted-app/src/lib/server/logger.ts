@@ -1,36 +1,39 @@
-import pino from 'pino';
+/**
+ * Workers has no process.stdout, so pino's transports do not apply here.
+ * console.* is what the Workers runtime captures for Workers Logs / `wrangler tail`.
+ */
+type Fields = object | undefined;
 
-const isDevelopment = process.env.NODE_ENV === 'development';
+// JSON.stringify turns an Error into {}, and callers routinely pass { error }.
+function replacer(_key: string, value: unknown) {
+	if (value instanceof Error) {
+		return { name: value.name, message: value.message, stack: value.stack };
+	}
+	return value;
+}
 
-// Create logger instance with environment-based configuration for server-side use
-const logger = pino({
-  name: 'simply-tweeted-app-server',
-  level: isDevelopment ? 'debug' : 'info',
-  transport: isDevelopment
-    ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'yyyy-mm-dd HH:MM:ss',
-          ignore: 'pid,hostname'
-        }
-      }
-    : undefined,
-  // In production, use structured JSON logging
-  formatters: {
-    level: (label) => ({ level: label }),
-    log: (object) => ({ ...object })
-  },
-  timestamp: () => `,"time":"${new Date().toISOString()}"`
-});
+function emit(level: string, message: string, extra?: Fields) {
+	const entry = {
+		level,
+		name: 'simply-tweeted-app-server',
+		time: new Date().toISOString(),
+		msg: message,
+		...(extra ?? {})
+	};
+	const line = JSON.stringify(entry, replacer);
+	if (level === 'error' || level === 'fatal') {
+		console.error(line);
+	} else if (level === 'warn') {
+		console.warn(line);
+	} else {
+		console.log(line);
+	}
+}
 
-export default logger;
-
-// Export convenience methods
 export const log = {
-  debug: (message: string, extra?: object) => logger.debug(extra, message),
-  info: (message: string, extra?: object) => logger.info(extra, message),
-  warn: (message: string, extra?: object) => logger.warn(extra, message),
-  error: (message: string, extra?: object) => logger.error(extra, message),
-  fatal: (message: string, extra?: object) => logger.fatal(extra, message)
-}; 
+	debug: (message: string, extra?: Fields) => emit('debug', message, extra),
+	info: (message: string, extra?: Fields) => emit('info', message, extra),
+	warn: (message: string, extra?: Fields) => emit('warn', message, extra),
+	error: (message: string, extra?: Fields) => emit('error', message, extra),
+	fatal: (message: string, extra?: Fields) => emit('fatal', message, extra)
+};

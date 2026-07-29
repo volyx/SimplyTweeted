@@ -1,12 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import { getDbInstance } from '$lib/server/db';
+import { getDb } from '$lib/server/db';
 import { TweetStatus } from 'shared-lib';
 import { log } from '$lib/server/logger.js';
 
 const TWEETS_PER_PAGE = 10;
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, platform }) => {
 	const session = await locals.auth();
 	if (!session?.user?.id) {
 		throw redirect(303, '/signin');
@@ -15,11 +15,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const page = parseInt(url.searchParams.get('page') || '1');
 
+	// A tweet the scheduler has claimed is briefly in POSTING; keep it visible
+	// here rather than having it vanish from both listings mid-flight.
+	const pendingStatuses = [TweetStatus.SCHEDULED, TweetStatus.POSTING];
+
 	try {
+		const db = getDb(platform);
 		// Use the generic utility functions from db for cleaner code
 		const [tweets, totalTweets] = await Promise.all([
-			getDbInstance().getTweets(userId, page, TWEETS_PER_PAGE, TweetStatus.SCHEDULED, 1),
-			getDbInstance().countTweets(userId, TweetStatus.SCHEDULED)
+			db.getTweets(userId, page, TWEETS_PER_PAGE, pendingStatuses, 1),
+			db.countTweets(userId, pendingStatuses)
 		]);
 
 		return {
@@ -35,7 +40,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 };
 
 export const actions: Actions = {
-	deleteTweet: async ({ request, locals }) => {
+	deleteTweet: async ({ request, locals, platform }) => {
 		const session = await locals.auth();
 		if (!session?.user?.id) {
 			return fail(401, { error: 'Unauthorized' });
@@ -50,8 +55,8 @@ export const actions: Actions = {
 		}
 
 		try {
-			const result = await getDbInstance().deleteTweet(tweetId, userId);
-			
+			const result = await getDb(platform).deleteTweet(tweetId, userId);
+
 			if (!result.success) {
 				return fail(404, { error: 'Tweet not found or you do not have permission to delete it' });
 			}
@@ -59,12 +64,6 @@ export const actions: Actions = {
 			return { success: true, deletedTweetId: tweetId };
 		} catch (error) {
 			log.error('Error deleting tweet:', { userId, tweetId, error });
-			
-			// Check if it's an invalid ObjectId error
-			if (error instanceof Error && error.message.includes('ObjectId')) {
-				return fail(400, { error: 'Invalid Tweet ID format' });
-			}
-			
 			return fail(500, { error: 'Failed to delete tweet' });
 		}
 	}

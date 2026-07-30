@@ -6,6 +6,7 @@
 		formatThreadPart,
 		normalizeThreadParts,
 		validateThreadParts,
+		splitThreadText,
 		MAX_TWEET_LENGTH,
 		MAX_THREAD_PARTS,
 		DAILY_POST_BUDGET
@@ -41,6 +42,25 @@
 	/** Length as X will see it, including the ` 1/3` suffix this part will carry. */
 	function partLength(index: number): number {
 		return formatThreadPart(parts[index], index, parts.length).length;
+	}
+
+	/**
+	 * How many parts this one would become if split. Computed against the rest of
+	 * the thread, because more parts means a wider ` n/total` suffix and so a
+	 * smaller budget per part.
+	 */
+	function splitPreview(index: number): string[] {
+		return splitThreadText(parts[index], parts.length - 1);
+	}
+
+	/** Replaces an over-long part in place with the chunks it splits into. */
+	function splitPart(index: number) {
+		const chunks = splitPreview(index);
+		if (chunks.length < 2) return;
+
+		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
+		activePartIndex = index;
+		showEmojiPicker = false;
 	}
 
 	function addPart() {
@@ -191,6 +211,27 @@
 									<span class="opacity-60">· posts as “… {i + 1}/{parts.length}”</span>
 								{/if}
 							</div>
+
+							{#if partLength(i) > MAX_TWEET_LENGTH}
+								{@const chunks = splitPreview(i)}
+								{@const wouldExceedMax = parts.length - 1 + chunks.length > MAX_THREAD_PARTS}
+								<div class="alert alert-warning py-2 mt-1">
+									<div class="flex-1 text-sm">
+										{#if wouldExceedMax}
+											Too long, and splitting it would need {parts.length - 1 + chunks.length} parts —
+											more than the {MAX_THREAD_PARTS}-part maximum. Shorten it first.
+										{:else}
+											This is {partLength(i) - MAX_TWEET_LENGTH} characters over. It can be split into
+											{chunks.length} parts at word boundaries.
+										{/if}
+									</div>
+									{#if !wouldExceedMax}
+										<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
+											Split into {chunks.length} parts
+										</button>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					{/each}
 

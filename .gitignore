@@ -3,6 +3,8 @@
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
+# Single source of truth for Worker secrets — never commit.
+secrets.json
 
 # Logs
 logs

@@ -52,34 +52,36 @@ npm run db:migrate
 
 ### 3. Set the secrets
 
-Generate two random values first:
+Both Workers read overlapping secrets, and three of them must be byte-identical. Keep one
+gitignored file as the source of truth rather than typing values twice:
 
 ```bash
+cp secrets.example.json secrets.json
 openssl rand -base64 32   # AUTH_SECRET
 openssl rand -base64 32   # DB_ENCRYPTION_KEY
+# fill in secrets.json, then:
+npm run secrets:push      # -> both Workers, each getting only the keys it reads
+npm run secrets:local     # -> both .dev.vars files, for `wrangler dev`
 ```
 
-Web Worker:
+| Secret | Web | Cron |
+|---|:-:|:-:|
+| `AUTH_SECRET` | ✅ | |
+| `DB_ENCRYPTION_KEY` | ✅ | ✅ |
+| `AUTH_TWITTER_ID` | ✅ | ✅ |
+| `AUTH_TWITTER_SECRET` | ✅ | ✅ |
+| `ALLOWED_TWITTER_ACCOUNTS` | ✅ | |
 
-```bash
-cd packages/simply-tweeted-app
-npx wrangler secret put AUTH_SECRET
-npx wrangler secret put DB_ENCRYPTION_KEY
-npx wrangler secret put AUTH_TWITTER_ID
-npx wrangler secret put AUTH_TWITTER_SECRET
-npx wrangler secret put ALLOWED_TWITTER_ACCOUNTS   # comma-separated X usernames
-```
+`secrets:push` sends all five to the web Worker and filters to just the three the scheduler
+reads, so neither Worker holds a secret it has no use for. `wrangler secret bulk` only
+deletes a key when it is explicitly set to `null`, so a partial `secrets.json` cannot
+silently remove a live secret.
 
-Scheduler Worker:
+> ⚠️ Changing `DB_ENCRYPTION_KEY` orphans every stored OAuth token — the scheduler will fail
+> to decrypt them and mark tweets `failed`. Treat it as permanent once users have signed in.
 
-```bash
-cd ../scheduler
-npx wrangler secret put DB_ENCRYPTION_KEY          # must match the web Worker's value
-npx wrangler secret put AUTH_TWITTER_ID
-npx wrangler secret put AUTH_TWITTER_SECRET
-```
-
-> ⚠️ `DB_ENCRYPTION_KEY` must be identical for both Workers. It decrypts the stored OAuth tokens — if they differ, the scheduler cannot post.
+`wrangler secret put <NAME>` still works for a one-off change; just remember the three shared
+keys live in two places.
 
 ### 4. Deploy
 
@@ -175,7 +177,30 @@ A monorepo of three packages, deployed as **two Workers sharing one D1 database*
                   └──────────────────────┘
 ```
 
-Why two Workers rather than one: the stock SvelteKit Cloudflare adapter emits a fetch-only Worker with no way to add a `scheduled()` handler. Splitting them keeps the adapter unmodified and isolates the cron's CPU budget from page rendering.
+### Why two Workers rather than one
+
+The immediate reason is mechanical: `@sveltejs/adapter-cloudflare` emits a fetch-only Worker
+and has no scheduled-handler support. Worse, it writes its output to whatever `main` points
+at and `rimraf`s that path first, so a hand-written wrapper cannot simply be dropped in
+there — merging requires a second wrangler config purely to satisfy the adapter.
+
+But the better reason is structural, and it survives even if the adapter gains support:
+
+- **The poster is the product; the web app is the control panel.** The scheduler runs
+  unattended and changes rarely. The SvelteKit app changes constantly. Merging puts the
+  stable critical component behind the churning one's build and removes independent
+  rollback.
+- Every cron tick would evaluate the whole SSR bundle at module scope unless the SvelteKit
+  worker is imported lazily — 1,440 times a day, against a 10 ms CPU budget.
+- `wrangler deploy [path]` can override the entry positionally, but a bare `wrangler deploy`
+  would then ship a Worker with `triggers.crons` and no `scheduled` export. Wrangler does
+  not validate that, so cron would fire into errors, rows would sit at `scheduled` forever,
+  and nothing would surface in the UI.
+
+The one genuine cost of splitting — three secrets duplicated by hand — is solved by
+`npm run secrets:push` above rather than by merging. Note that drift there fails *loudly*:
+AES-256-GCM rejects a mismatched `DB_ENCRYPTION_KEY`, the tweet is marked `failed`, and it
+appears in `/history`.
 
 ### Notes on the Workers runtime
 
@@ -542,7 +567,7 @@ curl -s -X POST https://api.x.com/2/oauth2/token -u "$CID:$SECRET" \
 ### Important Notes
 
 - **Rate Limits**: Free tier allows roughly **17 scheduled posts per 24h**. This, not Cloudflare, is the real ceiling.
-- **Security**: Keep credentials out of version control. Use `wrangler secret put`, never a committed file.
+- **Security**: Keep credentials out of version control. `secrets.json` and both `.dev.vars` files are gitignored; only `secrets.example.json` is committed.
 - **Callback URLs**: Must match exactly, including scheme and host.
 
 ## Troubleshooting

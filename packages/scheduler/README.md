@@ -66,7 +66,10 @@ Deploy:
 npm run deploy
 ```
 
-Secrets in production are set with `wrangler secret put`: `DB_ENCRYPTION_KEY`, `AUTH_TWITTER_ID`, `AUTH_TWITTER_SECRET`.
+This Worker reads three secrets: `DB_ENCRYPTION_KEY`, `AUTH_TWITTER_ID`, `AUTH_TWITTER_SECRET`
+— all shared with the web Worker and required to be identical. Set them from the repo root
+with `npm run secrets:push`, which pushes from a single gitignored `secrets.json` and filters
+to just these three. `npm run secrets:local` writes the matching `.dev.vars`.
 
 ## Tweet lifecycle
 

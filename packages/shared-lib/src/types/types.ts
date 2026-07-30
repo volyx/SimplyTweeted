@@ -30,4 +30,11 @@ export interface Tweet {
   status: TweetStatus;
   createdAt: Date;
   updatedAt?: Date;
+  /**
+   * Thread parts in order. Absent for an ordinary single tweet.
+   * Frozen at save time: `content` is for display, this is the post plan.
+   */
+  parts?: string[];
+  /** X post ids already created for this row, in order. Drives resume. */
+  postedIds?: string[];
 } 

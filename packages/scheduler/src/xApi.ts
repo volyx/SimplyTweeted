@@ -13,6 +13,28 @@ export interface XCredentials {
   clientSecret: string;
 }
 
+/**
+ * Carries the HTTP status as a real field. Callers branch on it (429 defers and
+ * resumes, 401/403 abandons the batch), and recovering the status by regexing an
+ * error message would break the first time anyone edits the string.
+ */
+export class XApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`X API request failed (${status}): ${body}`);
+    this.name = 'XApiError';
+  }
+}
+
+export interface PostTweetOptions {
+  /** Applied to the first post of a thread only; replies inherit the Community. */
+  communityId?: string;
+  /** Chains this post as a reply, forming the thread. */
+  inReplyToTweetId?: string;
+}
+
 interface TokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -59,8 +81,7 @@ export class XClient {
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Token refresh failed (${response.status}): ${body}`);
+      throw new XApiError(response.status, await response.text());
     }
 
     const token = (await response.json()) as TokenResponse;
@@ -88,11 +109,29 @@ export class XClient {
     return updatedAccount.access_token;
   }
 
-  /** Posts a tweet, optionally into an X Community. */
-  async postTweet(accessToken: string, text: string, communityId?: string): Promise<void> {
-    const payload: { text: string; community_id?: string } = { text };
-    if (communityId) {
-      payload.community_id = communityId;
+  /**
+   * Posts a tweet, optionally into an X Community and/or as a reply.
+   *
+   * @returns the id of the created post — required to chain the next part of a
+   *   thread.
+   */
+  async postTweet(
+    accessToken: string,
+    text: string,
+    options: PostTweetOptions = {}
+  ): Promise<string> {
+    // `community_id` is top-level; `reply` is a nested object.
+    const payload: {
+      text: string;
+      community_id?: string;
+      reply?: { in_reply_to_tweet_id: string };
+    } = { text };
+
+    if (options.communityId) {
+      payload.community_id = options.communityId;
+    }
+    if (options.inReplyToTweetId) {
+      payload.reply = { in_reply_to_tweet_id: options.inReplyToTweetId };
     }
 
     const response = await fetch(TWEETS_URL, {
@@ -104,9 +143,36 @@ export class XClient {
       body: JSON.stringify(payload)
     });
 
+    const body = await response.text();
+
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Tweet POST failed (${response.status}): ${body}`);
+      throw new XApiError(response.status, body);
     }
+
+    // X can return 2xx with an `errors` array and no `data.id`. Checking
+    // response.ok alone would hand back undefined, JSON.stringify would then
+    // silently drop `in_reply_to_tweet_id` from the next request, and that part
+    // would post as a standalone tweet — a broken thread plus a stray orphan,
+    // with nothing thrown. So the id is verified here.
+    let id: unknown;
+    try {
+      id = (JSON.parse(body) as { data?: { id?: unknown } }).data?.id;
+    } catch {
+      throw new XApiError(response.status, `unparseable success body: ${body.slice(0, 200)}`);
+    }
+
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new XApiError(response.status, `success response had no data.id: ${body.slice(0, 200)}`);
+    }
+
+    const remaining = response.headers.get('x-user-limit-24hour-remaining');
+    if (remaining !== null) {
+      log.info(`Posted ${id}; X reports ${remaining} posts remaining in the 24h window`, {
+        tweetId: id,
+        remaining
+      });
+    }
+
+    return id;
   }
 }

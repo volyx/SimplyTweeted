@@ -11,6 +11,7 @@ https://github.com/user-attachments/assets/a221680c-684f-41ae-99dd-5b5624675ab4
 ## Features
 
 - **📅 Tweet Scheduling**: Plan your content in advance and let Simply Tweeted post it at the perfect time. **Support posting on communities**
+- **🧵 Threads**: Compose up to 10 parts; each is posted as a reply to the previous one with ` 1/n` numbering appended automatically
 - **🔐 Authentication**: OAuth integration with X (Twitter) for secure access
 - **🔒 Token Security**: User tokens are encrypted and securely stored in the database
 - **📱 Responsive Design**: Works seamlessly on desktop and mobile devices
@@ -198,12 +199,53 @@ Tweet status transitions, with the claim that prevents double-posting when a run
 overlaps the next tick:
 
 ```
-scheduled ──(claimTweet)──► posting ──(X API 2xx)──► posted
-                               │
-                               └──(error)──────────► failed
+scheduled ──(claimTweet)──► posting ──(all parts 2xx)──► posted
+     ▲                         │
+     │                         ├──(429 / eviction)──┐
+     └──(quota deferral)───────┤                    │  reclaimed after 5 min,
+                               │                    └─ resumes at the next
+                               └──(error)──────────► failed    unposted part
 ```
 
 A `posting` row stranded by an interrupted run is reclaimed after 5 minutes.
+
+### Threads
+
+A thread is **one row**. `parts` is a JSON array frozen at save time; the ` 1/n`
+suffix is computed at post time from `parts.length`, so the two can never drift.
+`packages/shared-lib/src/types/thread.ts` holds the formatter and validator, and
+is used by the composer preview, the form action, and the scheduler alike — what
+the preview shows is byte-identical to what X receives.
+
+Three things make partial publication survivable, and they are load-bearing
+rather than nice-to-have:
+
+- **Resume, never restart.** Because the stale-claim reclaim above is already an
+  auto-retry, a thread evicted mid-flight comes back through the poster. It
+  starts at `postedIds.length` and chains to the last known id. Restarting would
+  duplicate every part already published.
+- **`recordThreadProgress` bumps `updatedAt` after every part.** That heartbeat is
+  what stops the 5-minute reclaim firing underneath a thread still legitimately
+  in flight.
+- **A post with no `data.id` throws.** X can return 2xx with an `errors` array and
+  no id; left unchecked, `JSON.stringify` silently drops `in_reply_to_tweet_id`
+  and the next part publishes as a standalone orphan tweet.
+
+Failure inside a thread always aborts the remainder — skipping a part would
+silently drop content from a numbered sequence. The row becomes `failed` with a
+non-empty `postedIds`, and `/history` shows "N of M posted" with links to what
+went out.
+
+**Quota.** X's free tier allows ~17 posts/24h, so a 5-part thread costs 5. Before
+starting a thread the scheduler counts parts it has posted in the last 24h from
+its own rows; if the whole thread won't fit it stays `scheduled` and goes out
+intact once the window rolls, rather than stranding a half-thread. The ledger is
+approximate — it cannot see posts made by other tools.
+
+**Limits.** `MAX_THREAD_PARTS = 10`, and `MAX_POSTS_PER_RUN = 15` per cron
+invocation. The latter is about subrequests, not rate limits: every X post *and
+every D1 call* counts against a 50-subrequest cap on the free plan, and a thread
+costs `2n + 2`.
 
 
 ## Getting Started
@@ -324,12 +366,20 @@ cron schedule lives in `packages/scheduler/wrangler.jsonc`.
 
 ### Database Schema
 
-Cloudflare D1 (SQLite), two tables — see [`migrations/0001_init.sql`](migrations/0001_init.sql):
+Cloudflare D1 (SQLite), two tables — see the [`migrations/`](migrations) directory:
 
-- **`tweets`** — one row per scheduled tweet: content, `scheduledDate` (epoch ms, UTC), community, and a `status` of `scheduled` → `posting` → `posted` / `failed`.
+- **`tweets`** — one row per scheduled item, `scheduledDate` (epoch ms, UTC), community, and a `status` of `scheduled` → `posting` → `posted` / `failed`. A thread is **one row**, not many: `parts` holds a JSON array of the individual texts, and `postedIds` records the X ids already published. `content` is the display text; `parts` is the authoritative post plan.
 - **`accounts`** — one row per user per OAuth provider, unique on `(userId, provider)`. The `access_token` and `refresh_token` columns are encrypted at rest with AES-256-GCM.
 
 Timestamps are stored as integer epoch milliseconds; the data layer converts them to `Date` on the way out.
+
+Migrations are tracked by wrangler in a `d1_migrations` table, so applying is idempotent:
+
+```bash
+npm run db:migrate:list    # read-only — shows what is unapplied
+npm run db:migrate         # apply to the remote database
+npm run db:migrate:local   # apply to the local one
+```
 
 ## 🤝 Contributions Welcome!
 
@@ -362,7 +412,8 @@ sign in, schedule a tweet a couple of minutes out, and confirm the cron posts it
 
 ```
 migrations/
-└── 0001_init.sql           # D1 schema
+├── 0001_init.sql           # D1 schema
+└── 0002_thread_columns.sql # parts + postedIds for threads
 packages/
 ├── simply-tweeted-app/     # "simplytweeted-web" Worker
 │   ├── wrangler.jsonc      # Bindings, assets, compatibility flags
@@ -396,7 +447,7 @@ Originally made with ❤️ by [Timothy](https://x.com/timot_me).
 
 This fork replaces the Docker + MongoDB deployment with Cloudflare Workers, D1,
 and Cron Triggers, so the whole app runs on the free tier. See
-[`migrations/0001_init.sql`](migrations/0001_init.sql) and the two
+[`migrations/`](migrations) and the two
 `wrangler.jsonc` files for the deployment surface.
 
 ## Setting Up X (Twitter) Developer Application
@@ -513,6 +564,9 @@ cd packages/scheduler && npx wrangler tail --format pretty
 | `/auth/error?error=AccessDenied` | The `signIn` callback returned false, or a D1 write failed | Check `ALLOWED_TWITTER_ACCOUNTS` contains your username without `@`; check the log for a `D1_ERROR` |
 | `OAuthProfileParseError` / *"Cannot read properties of undefined"* | X returned a non-success body from `/2/users/me` | The log line above it prints X's actual response |
 | Secrets appear set but are read as `''` | Env read at module scope | Keep `$env/dynamic/private` access lazy — see `src/lib/server/env.ts` |
+| A thread stays `scheduled` past its time, log says "Deferring thread" | Its parts don't fit in the remaining ~17/24h budget | Expected — it posts intact once the window rolls. Check `x-user-limit-24hour-remaining` in the cron logs |
+| Thread shows "N of M posted" and `failed` | A part was rejected mid-thread; the rest were aborted deliberately | The log line above it has X's response. Already-published parts stay on X |
+| `duplicate column name: parts` | Migrations replayed without tracked state | Use `npm run db:migrate`, not `d1 execute --file` |
 
 Secrets are per-Worker and resolved from the `wrangler.jsonc` in the current
 directory, so `wrangler secret put` from the repo root silently targets nothing.

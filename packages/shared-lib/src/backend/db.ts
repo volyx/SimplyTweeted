@@ -19,6 +19,10 @@ interface TweetRow {
   status: string;
   createdAt: number;
   updatedAt: number | null;
+  // JSON string[]. Optional rather than nullable so a row selected before the
+  // 0002 migration lands still types.
+  parts?: string | null;
+  postedIds?: string | null;
 }
 
 interface AccountRow {
@@ -37,6 +41,28 @@ interface AccountRow {
   updatedAt: number | null;
 }
 
+/**
+ * Deliberately total: returns undefined rather than throwing for null, absent,
+ * unparseable, or non-array values.
+ *
+ * findDueTweets maps every due row, so a single corrupt blob throwing in here
+ * would take down the whole cron run for every user, not just that row.
+ */
+function parseStringArray(value: unknown): string[] | undefined {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+      return undefined;
+    }
+    return parsed as string[];
+  } catch {
+    return undefined;
+  }
+}
+
 function toTweet(row: TweetRow): Tweet {
   return {
     id: row.id,
@@ -46,7 +72,9 @@ function toTweet(row: TweetRow): Tweet {
     community: row.community,
     status: row.status as TweetStatus,
     createdAt: new Date(row.createdAt),
-    updatedAt: row.updatedAt ? new Date(row.updatedAt) : undefined
+    updatedAt: row.updatedAt ? new Date(row.updatedAt) : undefined,
+    parts: parseStringArray(row.parts),
+    postedIds: parseStringArray(row.postedIds)
   };
 }
 
@@ -131,11 +159,15 @@ class DatabaseClient {
 
   async saveTweet(tweet: Tweet): Promise<string> {
     const id = tweet.id ?? randomUUID();
+    // Only a genuine thread gets `parts`. A single tweet keeps parts NULL, so
+    // existing rows and the single-tweet path stay byte-identical to before.
+    const parts = tweet.parts && tweet.parts.length > 1 ? JSON.stringify(tweet.parts) : null;
+
     await this.withRetry('saveTweet', () =>
       this.db
         .prepare(
-          `INSERT INTO tweets (id, userId, content, scheduledDate, community, status, createdAt, updatedAt)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+          `INSERT INTO tweets (id, userId, content, scheduledDate, community, status, createdAt, updatedAt, parts, postedIds)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`
         )
         .bind(
           id,
@@ -145,7 +177,9 @@ class DatabaseClient {
           tweet.community ?? '',
           tweet.status,
           tweet.createdAt.getTime(),
-          tweet.updatedAt ? tweet.updatedAt.getTime() : null
+          tweet.updatedAt ? tweet.updatedAt.getTime() : null,
+          parts,
+          tweet.postedIds && tweet.postedIds.length > 0 ? JSON.stringify(tweet.postedIds) : null
         )
         .run()
     );
@@ -198,16 +232,54 @@ class DatabaseClient {
     return row?.n ?? 0;
   }
 
+  /**
+   * Refuses to delete a row the scheduler has claimed. Without the status guard,
+   * deleting mid-thread removes the row while the poster is still iterating: the
+   * remaining progress writes silently update 0 rows and the thread finishes
+   * posting anyway, with no record of it.
+   */
   async deleteTweet(tweetId: string, userId: string) {
     const result = await this.withRetry('deleteTweet', () =>
       this.db
-        .prepare('DELETE FROM tweets WHERE id = ?1 AND userId = ?2')
-        .bind(tweetId, userId)
+        .prepare('DELETE FROM tweets WHERE id = ?1 AND userId = ?2 AND status != ?3')
+        .bind(tweetId, userId, TweetStatus.POSTING)
         .run()
     );
 
     const deletedCount = result.meta.changes ?? 0;
     return { success: deletedCount > 0, deletedCount };
+  }
+
+  /**
+   * Posts this app has made in a window, for the thread quota precondition.
+   *
+   * Counts parts, not rows: a posted 5-part thread consumed 5 of X's ~17/24h.
+   * Partially-posted threads (`failed` with a non-empty postedIds) consumed
+   * whatever actually went out. Summed in JS because both are JSON columns.
+   *
+   * Approximate by nature — it cannot see posts made by other tools.
+   */
+  async countPostsSince(userId: string, sinceMs: number): Promise<number> {
+    const { results } = await this.withRetry('countPostsSince', () =>
+      this.db
+        .prepare(
+          `SELECT status, parts, postedIds FROM tweets
+           WHERE userId = ?1 AND COALESCE(updatedAt, createdAt) >= ?2
+             AND status IN (?3, ?4, ?5)`
+        )
+        .bind(userId, sinceMs, TweetStatus.POSTED, TweetStatus.FAILED, TweetStatus.POSTING)
+        .all<Pick<TweetRow, 'status' | 'parts' | 'postedIds'>>()
+    );
+
+    return results.reduce((total, row) => {
+      const postedIds = parseStringArray(row.postedIds);
+      if (row.status === TweetStatus.POSTED) {
+        // Older posted rows predate postedIds, so fall back to the part count.
+        return total + (postedIds?.length ?? parseStringArray(row.parts)?.length ?? 1);
+      }
+      // failed / still-posting: only what actually reached X counts.
+      return total + (postedIds?.length ?? 0);
+    }, 0);
   }
 
   // Create or update a user account. The UNIQUE (userId, provider) constraint
@@ -285,7 +357,7 @@ class DatabaseClient {
    * Tweets that are due to be posted: everything still scheduled whose time has
    * passed, plus any stale `posting` claim left behind by an interrupted run.
    */
-  async findDueTweets(): Promise<Tweet[]> {
+  async findDueTweets(limit = 20): Promise<Tweet[]> {
     const now = Date.now();
     const { results } = await this.withRetry('findDueTweets', () =>
       this.db
@@ -293,9 +365,10 @@ class DatabaseClient {
           `SELECT * FROM tweets
          WHERE (status = ?1 AND scheduledDate <= ?3)
             OR (status = ?2 AND COALESCE(updatedAt, createdAt) <= ?4)
-         ORDER BY scheduledDate ASC`
+         ORDER BY scheduledDate ASC
+         LIMIT ?5`
         )
-        .bind(TweetStatus.SCHEDULED, TweetStatus.POSTING, now, now - STALE_CLAIM_MS)
+        .bind(TweetStatus.SCHEDULED, TweetStatus.POSTING, now, now - STALE_CLAIM_MS, limit)
         .all<TweetRow>()
     );
 
@@ -324,13 +397,42 @@ class DatabaseClient {
     return (result.meta.changes ?? 0) > 0;
   }
 
-  // Update the status of a tweet
-  async updateTweetStatus(tweetId: string, status: TweetStatus): Promise<void> {
-    await this.withRetry('updateTweetStatus', () =>
+  /**
+   * Records the X ids posted so far WITHOUT changing status.
+   *
+   * The `updatedAt` bump is load-bearing: it is the heartbeat that stops
+   * findDueTweets' 5-minute stale-claim reclaim from firing underneath a thread
+   * that is legitimately still in flight (and reposting it from part 1).
+   */
+  async recordThreadProgress(tweetId: string, postedIds: string[]): Promise<void> {
+    await this.withRetry('recordThreadProgress', () =>
       this.db
-        .prepare('UPDATE tweets SET status = ?1, updatedAt = ?2 WHERE id = ?3')
-        .bind(status, Date.now(), tweetId)
+        .prepare('UPDATE tweets SET postedIds = ?1, updatedAt = ?2 WHERE id = ?3')
+        .bind(JSON.stringify(postedIds), Date.now(), tweetId)
         .run()
+    );
+  }
+
+  /**
+   * Update the status of a tweet, optionally recording the posted X ids in the
+   * same statement — one write rather than two, which matters against the
+   * 50-subrequest-per-invocation cap on the free plan.
+   */
+  async updateTweetStatus(
+    tweetId: string,
+    status: TweetStatus,
+    postedIds?: string[]
+  ): Promise<void> {
+    await this.withRetry('updateTweetStatus', () =>
+      postedIds
+        ? this.db
+            .prepare('UPDATE tweets SET status = ?1, updatedAt = ?2, postedIds = ?4 WHERE id = ?3')
+            .bind(status, Date.now(), tweetId, JSON.stringify(postedIds))
+            .run()
+        : this.db
+            .prepare('UPDATE tweets SET status = ?1, updatedAt = ?2 WHERE id = ?3')
+            .bind(status, Date.now(), tweetId)
+            .run()
     );
   }
 }

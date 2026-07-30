@@ -1,7 +1,13 @@
 import { redirect, fail } from '@sveltejs/kit';
 import type { Actions, RequestEvent } from '@sveltejs/kit';
 import { getDb } from '$lib/server/db';
-import { TweetStatus, type Tweet, getAvailableCommunities } from 'shared-lib';
+import {
+	TweetStatus,
+	type Tweet,
+	getAvailableCommunities,
+	normalizeThreadParts,
+	validateThreadParts
+} from 'shared-lib';
 import { fromZonedTime } from 'date-fns-tz';
 import { log } from '$lib/server/logger.js';
 
@@ -54,49 +60,53 @@ export const actions: Actions = {
 		}
 		
 		const formData = await request.formData();
-		const content = formData.get('content') as string;
+		// The composer renders one textarea per part, all named `parts`, so getAll
+		// returns them in document order.
+		const parts = normalizeThreadParts(formData.getAll('parts').map((part) => String(part)));
 		const scheduledDate = formData.get('scheduledDate') as string;
 		const scheduledTime = formData.get('scheduledTime') as string;
 		const community = formData.get('community') as string;
 		const timezone = formData.get('timezone') as string;
-		
-		// Validation
-		if (!content || content.trim() === '') {
-			return fail(400, { content, error: 'Tweet content is required' });
+
+		// Covers empty content, the per-part 280 limit including its numbering
+		// suffix, and the maximum part count.
+		const threadError = validateThreadParts(parts);
+		if (threadError) {
+			return fail(400, { error: threadError });
 		}
-		
-		if (content.length > 280) {
-			return fail(400, { content, error: 'Tweet content must be 280 characters or less' });
-		}
-		
+
 		if (!scheduledDate || !scheduledTime) {
-			return fail(400, { content, error: 'Date and time are required' });
+			return fail(400, { error: 'Date and time are required' });
 		}
-		
+
 		// Convert the local time to UTC using the user's timezone
 		const scheduledDateTime = convertToUTC(scheduledDate, scheduledTime, timezone);
-		
+
 		// Check if the scheduled time is in the past (compare with current UTC time)
 		if (scheduledDateTime < new Date()) {
-			return fail(400, { content, error: 'Scheduled time must be in the future' });
+			return fail(400, { error: 'Scheduled time must be in the future' });
 		}
-		
-		let success = false;
+
 		try {
 			const tweet: Tweet = {
 				userId: session.user.id as string,
-				content,
+				// Display/fallback text. `parts` is the authoritative post plan.
+				content: parts.join('\n\n'),
 				scheduledDate: scheduledDateTime, // This is now properly in UTC
 				community,
 				status: TweetStatus.SCHEDULED,
-				createdAt: new Date() // This is also UTC
+				createdAt: new Date(), // This is also UTC
+				parts: parts.length > 1 ? parts : undefined
 			};
-			
+
 			await getDb(platform).saveTweet(tweet);
-			success = true;
 		} catch (error) {
-			log.error('Failed to save tweet:', { userId: session.user.id, content, error });
-			return fail(500, { content, error: 'Failed to schedule tweet. Please try again.' });
+			log.error('Failed to save tweet:', {
+				userId: session.user.id,
+				partCount: parts.length,
+				error
+			});
+			return fail(500, { error: 'Failed to schedule tweet. Please try again.' });
 		}
 
 		redirect(303, '/scheduled');

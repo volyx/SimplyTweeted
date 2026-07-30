@@ -9,7 +9,15 @@
   export let tweet: Tweet;
   export let onDelete: (id: string) => void = () => {};
   export let showDeleteButton: boolean = true;
-  
+
+  // A single tweet is just a one-part thread, so one code path renders both.
+  $: parts = tweet.parts ?? [tweet.content];
+  $: postedIds = tweet.postedIds ?? [];
+  // A thread that failed part-way through leaves posts on X. Say so plainly.
+  $: partiallyPosted =
+    tweet.status === TweetStatus.FAILED && postedIds.length > 0 && postedIds.length < parts.length;
+
+
   function formatDate(dateString: string | Date): string {
 
     try {
@@ -33,7 +41,48 @@
 
 <div class="card bg-base-200 shadow-lg hover:shadow-xl transition-shadow">
   <div class="card-body">
-    <p class="text-lg mb-3 whitespace-pre-wrap">{tweet.content}</p>
+    {#if parts.length > 1}
+      <div class="flex items-center gap-2 mb-2">
+        <span class="badge badge-primary badge-sm">Thread · {parts.length} parts</span>
+        {#if partiallyPosted}
+          <span class="badge badge-warning badge-sm">
+            {postedIds.length} of {parts.length} posted
+          </span>
+        {/if}
+      </div>
+      <div class="space-y-2 mb-3">
+        {#each parts as part, i}
+          <div class="border-l-2 border-base-300 pl-3">
+            <div class="flex items-baseline gap-2">
+              <span class="text-xs opacity-60 shrink-0">{i + 1}/{parts.length}</span>
+              <p class="text-lg whitespace-pre-wrap">{part}</p>
+            </div>
+            {#if postedIds[i]}
+              <a
+                class="link link-primary text-xs"
+                href="https://x.com/i/web/status/{postedIds[i]}"
+                target="_blank"
+                rel="noreferrer"
+              >
+                View on X
+              </a>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <p class="text-lg mb-3 whitespace-pre-wrap">{tweet.content}</p>
+      {#if postedIds[0]}
+        <a
+          class="link link-primary text-xs mb-3"
+          href="https://x.com/i/web/status/{postedIds[0]}"
+          target="_blank"
+          rel="noreferrer"
+        >
+          View on X
+        </a>
+      {/if}
+    {/if}
     <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
       <div class="space-y-2">
         <div class="flex items-center">

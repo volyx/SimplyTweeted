@@ -11,8 +11,9 @@
     "check": "npm run build --workspace=shared-lib && npm run check --workspace=simply-tweeted-app && npm run check --workspace=tweet-poster-service",
     "dev": "npm run dev --workspace=simply-tweeted-app",
     "dev:cron": "npm run dev --workspace=tweet-poster-service",
-    "db:migrate:local": "wrangler d1 execute simplytweeted --local --persist-to .wrangler-state --file=migrations/0001_init.sql",
-    "db:migrate": "wrangler d1 execute simplytweeted --remote --file=migrations/0001_init.sql",
+    "db:migrate:list": "wrangler d1 migrations list simplytweeted --remote --config packages/simply-tweeted-app/wrangler.jsonc",
+    "db:migrate:local": "wrangler d1 migrations apply simplytweeted --local --persist-to .wrangler-state --config packages/simply-tweeted-app/wrangler.jsonc",
+    "db:migrate": "wrangler d1 migrations apply simplytweeted --remote --config packages/simply-tweeted-app/wrangler.jsonc",
     "deploy": "npm run build --workspace=shared-lib && npm run deploy --workspace=simply-tweeted-app && npm run deploy --workspace=tweet-poster-service",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

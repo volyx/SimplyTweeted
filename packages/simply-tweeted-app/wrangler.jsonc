@@ -23,7 +23,11 @@
 		{
 			"binding": "DB",
 			"database_name": "simplytweeted",
-			"database_id": "109e7fcc-c198-47cf-a976-a87d15c40697"
+			"database_id": "109e7fcc-c198-47cf-a976-a87d15c40697",
+			// Resolved relative to THIS config file, not cwd. The repo root has no
+			// wrangler config, so the root package.json migration scripts target
+			// this one with --config.
+			"migrations_dir": "../../migrations"
 		}
 	],
 	"observability": {

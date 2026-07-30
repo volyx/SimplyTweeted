@@ -250,38 +250,6 @@ class DatabaseClient {
     return { success: deletedCount > 0, deletedCount };
   }
 
-  /**
-   * Posts this app has made in a window, for the thread quota precondition.
-   *
-   * Counts parts, not rows: a posted 5-part thread consumed 5 of X's ~17/24h.
-   * Partially-posted threads (`failed` with a non-empty postedIds) consumed
-   * whatever actually went out. Summed in JS because both are JSON columns.
-   *
-   * Approximate by nature — it cannot see posts made by other tools.
-   */
-  async countPostsSince(userId: string, sinceMs: number): Promise<number> {
-    const { results } = await this.withRetry('countPostsSince', () =>
-      this.db
-        .prepare(
-          `SELECT status, parts, postedIds FROM tweets
-           WHERE userId = ?1 AND COALESCE(updatedAt, createdAt) >= ?2
-             AND status IN (?3, ?4, ?5)`
-        )
-        .bind(userId, sinceMs, TweetStatus.POSTED, TweetStatus.FAILED, TweetStatus.POSTING)
-        .all<Pick<TweetRow, 'status' | 'parts' | 'postedIds'>>()
-    );
-
-    return results.reduce((total, row) => {
-      const postedIds = parseStringArray(row.postedIds);
-      if (row.status === TweetStatus.POSTED) {
-        // Older posted rows predate postedIds, so fall back to the part count.
-        return total + (postedIds?.length ?? parseStringArray(row.parts)?.length ?? 1);
-      }
-      // failed / still-posting: only what actually reached X counts.
-      return total + (postedIds?.length ?? 0);
-    }, 0);
-  }
-
   // Create or update a user account. The UNIQUE (userId, provider) constraint
   // turns this into a single upsert.
   async saveUserAccount(userAccount: UserAccount): Promise<string> {

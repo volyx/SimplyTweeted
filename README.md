@@ -136,7 +136,9 @@ Everything below is comfortably within the free tier for personal use:
 | D1 rows read / written | 5M / 100k per day | Hundreds |
 | Cron Triggers | 5 per account | 1 |
 
-The real ceiling is X itself: the free X API tier allows roughly **17 posts per 24 hours**.
+The real ceiling is X, not Cloudflare. X retired its free tier for new apps in early 2026 in
+favour of **pay-per-use credits** — an app with no credits gets `402 Payment Required` on
+every post. Older apps may still be on the grandfathered ~17 posts/24h allowance.
 
 If you ever exceed the 10 ms CPU limit on SSR, the fix is the $5/month Workers Paid plan — no architecture change is needed.
 
@@ -225,11 +227,10 @@ overlaps the next tick:
 
 ```
 scheduled ──(claimTweet)──► posting ──(all parts 2xx)──► posted
-     ▲                         │
-     │                         ├──(429 / eviction)──┐
-     └──(quota deferral)───────┤                    │  reclaimed after 5 min,
+                               │
+                               ├──(429 / eviction)──┐  reclaimed after 5 min,
                                │                    └─ resumes at the next
-                               └──(error)──────────► failed    unposted part
+                               └──(error)──────────► failed   unposted part
 ```
 
 A `posting` row stranded by an interrupted run is reclaimed after 5 minutes.
@@ -261,11 +262,12 @@ silently drop content from a numbered sequence. The row becomes `failed` with a
 non-empty `postedIds`, and `/history` shows "N of M posted" with links to what
 went out.
 
-**Quota.** X's free tier allows ~17 posts/24h, so a 5-part thread costs 5. Before
-starting a thread the scheduler counts parts it has posted in the last 24h from
-its own rows; if the whole thread won't fit it stays `scheduled` and goes out
-intact once the window rolls, rather than stranding a half-thread. The ledger is
-approximate — it cannot see posts made by other tools.
+**Quota.** There is no client-side quota gate. X moved to pay-per-use credits, so
+any budget this app modelled locally would be guessing — and a wrong guess defers
+threads that would have posted fine. X's own responses are the signal instead: a
+`429` leaves the row mid-flight so the 5-minute reclaim resumes it, and a `402`
+(credits depleted) marks it `failed`. Both are logged with X's response body, and
+successful posts log `x-user-limit-24hour-remaining` when X sends it.
 
 **Limits.** `MAX_THREAD_PARTS = 10`, and `MAX_POSTS_PER_RUN = 15` per cron
 invocation. The latter is about subrequests, not rate limits: every X post *and
@@ -589,7 +591,8 @@ cd packages/scheduler && npx wrangler tail --format pretty
 | `/auth/error?error=AccessDenied` | The `signIn` callback returned false, or a D1 write failed | Check `ALLOWED_TWITTER_ACCOUNTS` contains your username without `@`; check the log for a `D1_ERROR` |
 | `OAuthProfileParseError` / *"Cannot read properties of undefined"* | X returned a non-success body from `/2/users/me` | The log line above it prints X's actual response |
 | Secrets appear set but are read as `''` | Env read at module scope | Keep `$env/dynamic/private` access lazy — see `src/lib/server/env.ts` |
-| A thread stays `scheduled` past its time, log says "Deferring thread" | Its parts don't fit in the remaining ~17/24h budget | Expected — it posts intact once the window rolls. Check `x-user-limit-24hour-remaining` in the cron logs |
+| `402` / `"credits depleted"` in the cron log, row marked `failed` | The X app has no API credits | Top up in the X developer portal, then reset the row to `scheduled` to retry |
+| Row sits in `posting`, cron log shows a `429` | Rate limited mid-thread | Expected — the 5-minute reclaim resumes it from the next unposted part |
 | Thread shows "N of M posted" and `failed` | A part was rejected mid-thread; the rest were aborted deliberately | The log line above it has X's response. Already-published parts stay on X |
 | `duplicate column name: parts` | Migrations replayed without tracked state | Use `npm run db:migrate`, not `d1 execute --file` |
 

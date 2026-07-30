@@ -9,14 +9,11 @@
 
 export const MAX_TWEET_LENGTH = 280;
 
-/** More than this is pointless against X's ~17 posts/24h free tier. */
-export const MAX_THREAD_PARTS = 10;
-
 /**
- * X free tier: roughly 17 posts per 24h, app- and user-scoped.
- * Used to defer a thread that would not fit in the remaining budget.
+ * Upper bound on thread length. Also caps the per-invocation subrequest cost,
+ * which is 2n+2 against a 50-subrequest limit on the Workers free plan.
  */
-export const DAILY_POST_BUDGET = 17;
+export const MAX_THREAD_PARTS = 10;
 
 /**
  * Appends the ` 1/3` enumeration. A single-part "thread" is just a tweet and

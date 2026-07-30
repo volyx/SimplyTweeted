@@ -1,26 +1,13 @@
 import { DatabaseClient } from 'shared-lib/backend';
-import {
-  TweetStatus,
-  Tweet,
-  UserAccount,
-  getCommunityId,
-  formatThreadPart,
-  DAILY_POST_BUDGET
-} from 'shared-lib';
+import { TweetStatus, Tweet, UserAccount, getCommunityId, formatThreadPart } from 'shared-lib';
 import { XClient, XApiError } from './xApi.js';
 import { log } from './logger.js';
-
-/** Rolling window X applies to its post cap. */
-const QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * A row stuck in `posting` gets reclaimed every 5 minutes. Give up eventually so
  * a permanently broken thread cannot cycle forever.
  */
 const ABANDON_AFTER_MS = 24 * 60 * 60 * 1000;
-
-/** Raised when a thread cannot be started without exceeding the daily budget. */
-class QuotaDeferral extends Error {}
 
 export class TweetProcessor {
   private dbClient: DatabaseClient;
@@ -84,18 +71,6 @@ export class TweetProcessor {
         startIndex,
         total
       });
-    } else if (total > 1) {
-      // Only gate real threads, so an ordinary tweet costs no extra D1 read.
-      const used = await this.dbClient.countPostsSince(
-        tweet.userId,
-        Date.now() - QUOTA_WINDOW_MS
-      );
-      const remaining = DAILY_POST_BUDGET - used;
-      if (remaining < total) {
-        throw new QuotaDeferral(
-          `needs ${total} posts, only ${remaining} of ${DAILY_POST_BUDGET} left in the 24h window`
-        );
-      }
     }
 
     for (let i = startIndex; i < total; i++) {
@@ -220,16 +195,6 @@ export class TweetProcessor {
             communityId: communityId || 'none'
           });
         } catch (error) {
-          if (error instanceof QuotaDeferral) {
-            // Hand the claim back so it is picked up again once the window rolls.
-            log.info(`Deferring thread ${tweet.id}: ${error.message}`, {
-              tweetId: tweet.id,
-              userId
-            });
-            await this.dbClient.updateTweetStatus(tweet.id!, TweetStatus.SCHEDULED);
-            continue;
-          }
-
           log.error(`Error posting tweet ${tweet.id} for user ${userId}:`, {
             tweetId: tweet.id,
             userId,

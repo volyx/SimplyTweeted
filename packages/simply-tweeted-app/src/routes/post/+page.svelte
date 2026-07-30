@@ -8,8 +8,7 @@
 		validateThreadParts,
 		splitThreadText,
 		MAX_TWEET_LENGTH,
-		MAX_THREAD_PARTS,
-		DAILY_POST_BUDGET
+		MAX_THREAD_PARTS
 	} from 'shared-lib';
 	import type { PageData, ActionData } from './$types';
 
@@ -246,7 +245,7 @@
 						</button>
 						{#if parts.length > 1}
 							<span class="label-text-alt opacity-70">
-								Uses {parts.length} of ~{DAILY_POST_BUDGET} daily posts
+								Posts as {parts.length} tweets, each replying to the last
 							</span>
 						{:else}
 							<span class="label-text-alt opacity-70">Add a part to make this a thread</span>

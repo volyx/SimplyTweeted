@@ -29,7 +29,7 @@ Simply Tweeted runs entirely on the **Cloudflare Workers free plan**: two Worker
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/timotme/SimplyTweeted.git
+git clone https://github.com/volyx/SimplyTweeted.git
 cd SimplyTweeted
 npm install
 npx wrangler login
@@ -176,6 +176,35 @@ A monorepo of three packages, deployed as **two Workers sharing one D1 database*
 
 Why two Workers rather than one: the stock SvelteKit Cloudflare adapter emits a fetch-only Worker with no way to add a `scheduled()` handler. Splitting them keeps the adapter unmodified and isolates the cron's CPU budget from page rendering.
 
+### Notes on the Workers runtime
+
+Three constraints shaped this design, and they are easy to trip over again:
+
+- **Read env lazily.** Secrets arrive on `platform.env` and SvelteKit surfaces
+  them via AsyncLocalStorage. A module-level `const X = env.X` runs at isolate
+  startup, outside any request's ALS context, and silently yields `''` forever.
+  `src/lib/server/env.ts` exposes accessor functions, and `src/auth.ts` builds
+  its Auth.js config per event, for exactly this reason.
+- **No singletons for D1.** `DatabaseClient` is constructed per request from the
+  binding. There is no connection to pool, and caching one in module scope would
+  outlive the request whose bindings it captured.
+- **D1 writes are retried.** D1 intermittently fails a statement with *"storage
+  operation exceeded timeout which caused object to be reset"* — a transient
+  fault in its backing Durable Object, not a bad query. Every call is wrapped in
+  a bounded retry; non-transient errors such as constraint violations still fail
+  fast.
+
+Tweet status transitions, with the claim that prevents double-posting when a run
+overlaps the next tick:
+
+```
+scheduled ──(claimTweet)──► posting ──(X API 2xx)──► posted
+                               │
+                               └──(error)──────────► failed
+```
+
+A `posting` row stranded by an interrupted run is reclaimed after 5 minutes.
+
 
 ## Getting Started
 
@@ -192,7 +221,7 @@ Everything runs locally against a local D1 database — no Cloudflare account ne
 #### 1. Clone and install
 
 ```bash
-git clone https://github.com/timotme/SimplyTweeted.git
+git clone https://github.com/volyx/SimplyTweeted.git
 cd SimplyTweeted
 npm install
 ```
@@ -272,13 +301,26 @@ npm run check
 
 ## Configuration
 
-### Twitter API Setup
+### X API Setup
 
-1. Create a Twitter Developer Account
-2. Create a new App in the Twitter Developer Portal
-3. Generate your API keys and tokens
-4. Add the credentials to your environment file
-5. Set up OAuth 2.0 with the correct callback URLs
+See [Setting Up X (Twitter) Developer Application](#setting-up-x-twitter-developer-application)
+for the full walkthrough, including the two things that most often go wrong: the
+App must sit inside a **Project**, and you need the **OAuth 2.0** Client ID and
+Secret rather than the API Key / Bearer Token.
+
+### Secrets
+
+All configuration is Worker secrets — there are no `.env` files in production and
+no `MONGODB_URI`, `AUTH_URL`, `ORIGIN`, `PORT` or `CRON_SCHEDULE` any more. The
+cron schedule lives in `packages/scheduler/wrangler.jsonc`.
+
+| Secret | Web | Cron | Notes |
+|---|:-:|:-:|---|
+| `AUTH_SECRET` | ✅ | | Signs the session JWT |
+| `DB_ENCRYPTION_KEY` | ✅ | ✅ | **Must be identical on both.** Decrypts stored OAuth tokens — lose it and every user must re-authenticate |
+| `AUTH_TWITTER_ID` | ✅ | ✅ | OAuth 2.0 Client ID |
+| `AUTH_TWITTER_SECRET` | ✅ | ✅ | OAuth 2.0 Client Secret |
+| `ALLOWED_TWITTER_ACCOUNTS` | ✅ | | Comma-separated X usernames, no `@`. Empty means nobody can sign in |
 
 ### Database Schema
 
@@ -310,6 +352,10 @@ We love contributions from the community! Whether you're fixing bugs, adding new
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+There is no test suite yet and `npm test` exits 1, so verify changes by running
+`npm run check` (typechecks all three packages) plus a manual end-to-end pass:
+sign in, schedule a tweet a couple of minutes out, and confirm the cron posts it.
+
 ## Development
 
 ### Code Structure
@@ -340,11 +386,18 @@ This project is licensed under the GPL-3.0-or-later License - see the [LICENSE](
 
 ## Support
 
-If you encounter any issues or have questions, please [open an issue](https://github.com/timotme/SimplyTweeted/issues) on GitHub.
+For issues with this Cloudflare port, [open an issue](https://github.com/volyx/SimplyTweeted/issues)
+on this fork. For questions about the original app, see
+[timotme/SimplyTweeted](https://github.com/timotme/SimplyTweeted/issues).
 
 ---
 
-Made with ❤️ by [Timothy] [https://x.com/timot_me]
+Originally made with ❤️ by [Timothy](https://x.com/timot_me).
+
+This fork replaces the Docker + MongoDB deployment with Cloudflare Workers, D1,
+and Cron Triggers, so the whole app runs on the free tier. See
+[`migrations/0001_init.sql`](migrations/0001_init.sql) and the two
+`wrangler.jsonc` files for the deployment surface.
 
 ## Setting Up X (Twitter) Developer Application
 
@@ -360,57 +413,109 @@ To use Simply Tweeted, you'll need to create an X (Twitter) developer applicatio
    - Explain how you'll use the Twitter API
    - Agree to the Developer Agreement and Policy
 
-### 2. Create a New App
+### 2. Create a Project, then an App inside it
 
-Once your developer account is approved:
+> 🚨 **The App must live inside a Project.** X blocks *every* v2 API endpoint for
+> standalone apps, so sign-in fails with a 403 that has nothing to do with your
+> credentials. This is the single most common way to get stuck.
 
 1. **Navigate to the Developer Portal**: Go to your [developer dashboard](https://developer.x.com/en/portal/dashboard)
-2. **Create a New Project**: Click "Create Project"
-3. **Project Details**:
+2. **Create a Project** first: Click "Create Project"
    - **Name**: Simply Tweeted (or your preferred name)
    - **Use Case**: Choose "Making a bot" or "Building tools for yourself"
-   - **Environment**: Select "Development" for testing or "Production" for live use
+3. **Create the App inside that Project** when prompted — not from the dashboard's
+   top-level "Create App", which produces a standalone app.
 
-### 3. Configure Your App
+If your app already exists under a **Standalone Apps** heading, move it into a
+Project via the Project's **Add App** → *add an existing App*. Prefer moving it
+over recreating it: a new app means a new Client ID and Secret to re-register.
 
-1. **App Settings**: Click on your newly created app
-2. **App Permissions**: 
-   - Set to **"Read and write"** (required for posting tweets)
-   - Enable **"Request email address from users"** if you want email access
-3. **Authentication Settings**:
-   - **App Type**: Set to "Web App"
-   - **Callback URLs**: Add your deployed Worker's callback:
-     ```
-     https://twitter.volyx.in/auth/callback/twitter
-     ```
-     For local development, also add:
-     ```
-     http://localhost:5173/auth/callback/twitter
-     ```
-   - **Website URL**: Add your application's URL (this is not important)
+### 3. Enable OAuth 2.0 (this is what creates the credentials)
 
-### 4. Generate OAuth 2.0 Credentials
+Open the App → **Settings** → scroll to the bottom → **User authentication
+settings** → **Set up**. The OAuth 2.0 Client ID and Secret **do not exist until
+you complete this form** — before that, the Keys and tokens page shows only
+OAuth 1.0a consumer keys.
 
-Simply Tweeted uses OAuth 2.0 for authentication. You only need the OAuth 2.0 Client ID and Client Secret:
+| Field | Value |
+|---|---|
+| App permissions | **Read and write** (required for posting) |
+| Type of App | **Web App, Automated App or Bot** |
+| Callback URI | `https://twitter.volyx.in/auth/callback/twitter` |
+| Website URL | `https://twitter.volyx.in` |
 
-1. **User Authentication Settings**: In your app settings, click "Set up" in the OAuth 2.0 section
-2. **OAuth 2.0 Settings**:
-   - **App Type**: Select "Confidential client"
-   - **Client ID**: This becomes your `AUTH_TWITTER_ID`
-   - **Client Secret**: This becomes your `AUTH_TWITTER_SECRET`
+For local development, also add `http://localhost:5173/auth/callback/twitter`.
 
-**Note**: You don't need the older API Key and API Secret - Simply Tweeted only uses OAuth 2.0 credentials.
+**Type of App matters.** *Web App, Automated App or Bot* registers a
+**confidential client**, which is what gets a client secret and authenticates
+with an HTTP Basic header. *Native App* and *Single page App* are public clients
+with no secret, and both sign-in and token refresh will fail.
+
+### 4. Copy the right credentials
+
+Saving that form displays the pair you need. **The Client Secret is shown only
+once** — copy it immediately, or regenerate it later from **Keys and tokens**.
+
+> ⚠️ **Do not use the API Key / API Secret / Bearer Token.** Those are OAuth 1.0a
+> and app-only credentials, they sit higher up the same page, and this app uses
+> none of them. Look for the section headed **OAuth 2.0 Client ID and Client
+> Secret**.
+>
+> How to tell them apart: the API Key is 25 plain alphanumerics
+> (`m3J0lnm1YmG1DobhBhYxARtkN`). The Client ID is longer mixed-case base64 that
+> decodes to something ending in `:1:ci`
+> (`S2JtLUlnQUM0dWhoLUpNRmdNMTk6MTpjaQ`).
+
+- **Client ID** → `AUTH_TWITTER_ID`
+- **Client Secret** → `AUTH_TWITTER_SECRET`
+
+Set both on **both** Workers — the scheduler needs them too, for token refresh.
+
+### 5. Verify the pair before deploying
+
+One curl saves a deploy-and-login cycle. Substitute your own values:
+
+```bash
+CID='your-client-id'
+SECRET='your-client-secret'
+curl -s -X POST https://api.x.com/2/oauth2/token -u "$CID:$SECRET" \
+  -d "grant_type=refresh_token&refresh_token=INVALID&client_id=$CID"
+```
+
+| Response | Meaning |
+|---|---|
+| `"Value passed for the token was invalid"` | ✅ Credentials accepted — only the dummy token was rejected |
+| `"Missing valid authorization header"` | ❌ Wrong Client Secret (X's wording is misleading) |
+| `"Value passed for the client id was invalid"` | ❌ Wrong Client ID |
 
 ### Important Notes
 
-- **Rate Limits**: Free tier has limited API calls per day/months. ~ 17 scheduled posts per 24h
-- **Security**: Keep your API keys secure and never commit them to version control
-- **Callback URLs**: Must exactly match your domain (including https/http)
+- **Rate Limits**: Free tier allows roughly **17 scheduled posts per 24h**. This, not Cloudflare, is the real ceiling.
+- **Security**: Keep credentials out of version control. Use `wrangler secret put`, never a committed file.
+- **Callback URLs**: Must match exactly, including scheme and host.
 
-### Common Issues
+## Troubleshooting
 
-- **Callback URL Mismatch**: Ensure the URL you are visiting matches a callback URL registered in your X app. Auth.js derives the callback from the incoming request host (`trustHost: true`), so `workers.dev` and any custom domain each need their own entry.
-- **Permission Denied**: Verify your app has "Read and write" permissions
-- **Invalid Credentials**: Double-check your `AUTH_TWITTER_ID` and `AUTH_TWITTER_SECRET`
+Read the Worker logs first — they contain the actual cause, which the browser
+error page hides:
 
-For more detailed information, visit the [X API documentation](https://developer.twitter.com/en/docs).
+```bash
+cd packages/simply-tweeted-app && npx wrangler tail --format pretty
+# or the scheduler:
+cd packages/scheduler && npx wrangler tail --format pretty
+```
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/auth/error?error=Configuration` + `unauthorized_client` / *"Missing valid authorization header"* | Wrong `AUTH_TWITTER_SECRET`, or a public-client app type | Re-copy the OAuth 2.0 Client Secret; confirm Type of App is *Web App, Automated App or Bot*. Verify with the curl above. |
+| `403` + `client-not-enrolled` / *"…App that is attached to a Project"* | App is standalone | Attach it to a Project (step 2) |
+| `client_id=` empty in the authorize URL | `AUTH_TWITTER_ID` not set on the web Worker | `wrangler secret put AUTH_TWITTER_ID` from `packages/simply-tweeted-app` |
+| `/auth/error?error=AccessDenied` | The `signIn` callback returned false, or a D1 write failed | Check `ALLOWED_TWITTER_ACCOUNTS` contains your username without `@`; check the log for a `D1_ERROR` |
+| `OAuthProfileParseError` / *"Cannot read properties of undefined"* | X returned a non-success body from `/2/users/me` | The log line above it prints X's actual response |
+| Secrets appear set but are read as `''` | Env read at module scope | Keep `$env/dynamic/private` access lazy — see `src/lib/server/env.ts` |
+
+Secrets are per-Worker and resolved from the `wrangler.jsonc` in the current
+directory, so `wrangler secret put` from the repo root silently targets nothing.
+`cd` into the package first.
+
+For more detailed information, visit the [X API documentation](https://docs.x.com).

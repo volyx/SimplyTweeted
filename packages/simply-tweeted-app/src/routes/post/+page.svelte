@@ -233,15 +233,22 @@
 								{@const chunks = splitPlan(i)}
 								{@const threadFull = MAX_THREAD_PARTS - (parts.length - 1) < 2}
 								{@const total = parts.length - 1 + chunks.length}
+								<!-- chunks is empty when the text is all whitespace: over the limit, but
+								     nothing to split. Guarding here keeps the last-chunk read below safe. -->
+								{@const canSplit = !threadFull && chunks.length > 1}
 								{@const stillOver =
+									canSplit &&
 									formatThreadPart(chunks[chunks.length - 1], total - 1, total).length >
-									MAX_TWEET_LENGTH}
+										MAX_TWEET_LENGTH}
 								<div class="alert alert-warning py-2 mt-1">
 									<div class="flex-1 text-sm">
 										{#if threadFull}
 											This is {partLength(i) - MAX_TWEET_LENGTH} characters over, and the thread is
 											already at its {MAX_THREAD_PARTS}-part maximum. Shorten it, or remove another
 											part to make room.
+										{:else if !canSplit}
+											This is {partLength(i) - MAX_TWEET_LENGTH} characters over the {MAX_TWEET_LENGTH}-character
+											limit. Shorten it.
 										{:else if stillOver}
 											This is {partLength(i) - MAX_TWEET_LENGTH} characters over — more than
 											{MAX_THREAD_PARTS} parts can hold. Splitting fills the thread and leaves the
@@ -251,7 +258,7 @@
 											{chunks.length} parts at word boundaries.
 										{/if}
 									</div>
-									{#if !threadFull}
+									{#if canSplit}
 										<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
 											Split into {chunks.length} parts
 										</button>

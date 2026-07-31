@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import {
 		formatThreadPart,
@@ -26,8 +26,6 @@
 	let emojiPickerElement: HTMLElement;
 	let activePartIndex = 0;
 	let userTimezone = '';
-	/** Set when a paste was auto-split, so the new boxes don't appear unexplained. */
-	let pasteNotice: string | null = null;
 
 	// Validate exactly what the server will validate, via the same shared helpers.
 	$: threadError = validateThreadParts(normalizeThreadParts(parts));
@@ -51,10 +49,10 @@
 	 * budget per part.
 	 *
 	 * Text needing more parts than the thread has room for is *not* refused —
-	 * refusing left an over-long paste sitting in one box doing nothing, which
-	 * reads as the split being broken. Instead the chunks that don't fit are
-	 * rejoined into the final part, which then trips the ordinary over-limit
-	 * warning. Every character survives and the box to trim is obvious.
+	 * refusing meant the button vanished exactly when the text most needed
+	 * splitting. Instead the chunks that don't fit are rejoined into the final
+	 * part, which then trips the ordinary over-limit warning. Every character
+	 * survives and the box to trim is obvious.
 	 */
 	function splitPlan(index: number): string[] {
 		const chunks = splitThreadText(parts[index], parts.length - 1);
@@ -67,55 +65,19 @@
 		return [...chunks.slice(0, room - 1), chunks.slice(room - 1).join(' ')];
 	}
 
-	/**
-	 * Replaces an over-long part in place with the parts it splits into.
-	 *
-	 * @returns the number of parts it became, or 0 when it was left alone.
-	 */
-	function splitPart(index: number): number {
+	/** Replaces an over-long part in place with the parts it splits into. */
+	function splitPart(index: number) {
 		// room < 2 means the thread is already at its maximum length, so there is
-		// nowhere to put a second part. The button is hidden then, but the paste
-		// handler calls this unattended — so the guard lives here too.
-		if (MAX_THREAD_PARTS - (parts.length - 1) < 2) return 0;
+		// nowhere to put a second part. The button is hidden then; this mirrors the
+		// guard so the two cannot drift apart.
+		if (MAX_THREAD_PARTS - (parts.length - 1) < 2) return;
 
 		const chunks = splitPlan(index);
-		if (chunks.length < 2) return 0;
+		if (chunks.length < 2) return;
 
 		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
 		activePartIndex = index;
 		showEmojiPicker = false;
-		return chunks.length;
-	}
-
-	/**
-	 * Pasting an over-long block is the usual way to end up past the limit, and
-	 * unlike typing there is no half-written sentence to disturb — so split it
-	 * immediately instead of waiting for the button. Deferred to a macrotask
-	 * because `parts[index]` only picks up the pasted text on the `input` event
-	 * that fires after this one.
-	 */
-	function handlePaste(index: number) {
-		setTimeout(async () => {
-			if (partLength(index) <= MAX_TWEET_LENGTH) return;
-
-			const count = splitPart(index);
-			if (count === 0) return;
-
-			// A paste bigger than the whole thread can hold still splits, with the
-			// overflow left in the last part for the user to trim.
-			const overflowed = partLength(index + count - 1) > MAX_TWEET_LENGTH;
-			pasteNotice = overflowed
-				? `Pasted text was split into ${count} parts — the maximum. Part ${index + count} is still over ${MAX_TWEET_LENGTH} characters, so trim it before scheduling.`
-				: `Pasted text was over ${MAX_TWEET_LENGTH} characters — split into ${count} parts.`;
-
-			// Leave the caret where the pasted text now ends, ready to keep typing.
-			await tick();
-			const last = document.getElementById(`part-${index + count - 1}`);
-			if (last instanceof HTMLTextAreaElement) {
-				last.focus();
-				last.setSelectionRange(last.value.length, last.value.length);
-			}
-		});
 	}
 
 	function addPart() {
@@ -199,20 +161,6 @@
 						</span>
 					</label>
 
-					{#if pasteNotice}
-						<div class="alert alert-info py-2 mb-3">
-							<span class="flex-1 text-sm">{pasteNotice}</span>
-							<button
-								type="button"
-								class="btn btn-ghost btn-xs"
-								title="Dismiss"
-								on:click={() => (pasteNotice = null)}
-							>
-								✕
-							</button>
-						</div>
-					{/if}
-
 					{#each parts as _, i}
 						<div class="mb-3">
 							{#if parts.length > 1}
@@ -259,7 +207,6 @@
 										? "What's on your mind? Share your thoughts here..."
 										: `Part ${i + 1} of the thread...`}
 									on:focus={() => (activePartIndex = i)}
-									on:paste={() => handlePaste(i)}
 								></textarea>
 								<button
 									type="button"

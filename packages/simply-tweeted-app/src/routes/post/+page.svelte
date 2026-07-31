@@ -46,29 +46,40 @@
 	}
 
 	/**
-	 * How many parts this one would become if split. Computed against the rest of
-	 * the thread, because more parts means a wider ` n/total` suffix and so a
-	 * smaller budget per part.
+	 * What this part would become if split. Computed against the rest of the
+	 * thread, because more parts means a wider ` n/total` suffix and so a smaller
+	 * budget per part.
+	 *
+	 * Text needing more parts than the thread has room for is *not* refused —
+	 * refusing left an over-long paste sitting in one box doing nothing, which
+	 * reads as the split being broken. Instead the chunks that don't fit are
+	 * rejoined into the final part, which then trips the ordinary over-limit
+	 * warning. Every character survives and the box to trim is obvious.
 	 */
-	function splitPreview(index: number): string[] {
-		return splitThreadText(parts[index], parts.length - 1);
-	}
-
-	/** Whether splitting this part would fit inside the thread-length maximum. */
-	function splitFits(index: number, chunks: string[]): boolean {
-		return parts.length - 1 + chunks.length <= MAX_THREAD_PARTS;
+	function splitPlan(index: number): string[] {
+		const chunks = splitThreadText(parts[index], parts.length - 1);
+		// How many parts this box may expand into, given the ones around it.
+		const room = MAX_THREAD_PARTS - (parts.length - 1);
+		if (chunks.length <= room) {
+			return chunks;
+		}
+		// ' ' rejoins faithfully: the splitter only ever breaks on whitespace it drops.
+		return [...chunks.slice(0, room - 1), chunks.slice(room - 1).join(' ')];
 	}
 
 	/**
-	 * Replaces an over-long part in place with the chunks it splits into.
+	 * Replaces an over-long part in place with the parts it splits into.
 	 *
 	 * @returns the number of parts it became, or 0 when it was left alone.
 	 */
 	function splitPart(index: number): number {
-		const chunks = splitPreview(index);
-		// The button is hidden in both these cases, but the paste handler calls this
-		// unattended — so the guards live here rather than only in the markup.
-		if (chunks.length < 2 || !splitFits(index, chunks)) return 0;
+		// room < 2 means the thread is already at its maximum length, so there is
+		// nowhere to put a second part. The button is hidden then, but the paste
+		// handler calls this unattended — so the guard lives here too.
+		if (MAX_THREAD_PARTS - (parts.length - 1) < 2) return 0;
+
+		const chunks = splitPlan(index);
+		if (chunks.length < 2) return 0;
 
 		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
 		activePartIndex = index;
@@ -82,9 +93,6 @@
 	 * immediately instead of waiting for the button. Deferred to a macrotask
 	 * because `parts[index]` only picks up the pasted text on the `input` event
 	 * that fires after this one.
-	 *
-	 * A paste too long to split (over the {MAX_THREAD_PARTS}-part cap) falls
-	 * through to the existing "shorten it first" warning.
 	 */
 	function handlePaste(index: number) {
 		setTimeout(async () => {
@@ -93,7 +101,12 @@
 			const count = splitPart(index);
 			if (count === 0) return;
 
-			pasteNotice = `Pasted text was over ${MAX_TWEET_LENGTH} characters — split into ${count} parts.`;
+			// A paste bigger than the whole thread can hold still splits, with the
+			// overflow left in the last part for the user to trim.
+			const overflowed = partLength(index + count - 1) > MAX_TWEET_LENGTH;
+			pasteNotice = overflowed
+				? `Pasted text was split into ${count} parts — the maximum. Part ${index + count} is still over ${MAX_TWEET_LENGTH} characters, so trim it before scheduling.`
+				: `Pasted text was over ${MAX_TWEET_LENGTH} characters — split into ${count} parts.`;
 
 			// Leave the caret where the pasted text now ends, ready to keep typing.
 			await tick();
@@ -270,19 +283,28 @@
 							</div>
 
 							{#if partLength(i) > MAX_TWEET_LENGTH}
-								{@const chunks = splitPreview(i)}
-								{@const wouldExceedMax = !splitFits(i, chunks)}
+								{@const chunks = splitPlan(i)}
+								{@const threadFull = MAX_THREAD_PARTS - (parts.length - 1) < 2}
+								{@const total = parts.length - 1 + chunks.length}
+								{@const stillOver =
+									formatThreadPart(chunks[chunks.length - 1], total - 1, total).length >
+									MAX_TWEET_LENGTH}
 								<div class="alert alert-warning py-2 mt-1">
 									<div class="flex-1 text-sm">
-										{#if wouldExceedMax}
-											Too long, and splitting it would need {parts.length - 1 + chunks.length} parts —
-											more than the {MAX_THREAD_PARTS}-part maximum. Shorten it first.
+										{#if threadFull}
+											This is {partLength(i) - MAX_TWEET_LENGTH} characters over, and the thread is
+											already at its {MAX_THREAD_PARTS}-part maximum. Shorten it, or remove another
+											part to make room.
+										{:else if stillOver}
+											This is {partLength(i) - MAX_TWEET_LENGTH} characters over — more than
+											{MAX_THREAD_PARTS} parts can hold. Splitting fills the thread and leaves the
+											remainder in part {i + chunks.length} for you to trim.
 										{:else}
 											This is {partLength(i) - MAX_TWEET_LENGTH} characters over. It can be split into
 											{chunks.length} parts at word boundaries.
 										{/if}
 									</div>
-									{#if !wouldExceedMax}
+									{#if !threadFull}
 										<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
 											Split into {chunks.length} parts
 										</button>

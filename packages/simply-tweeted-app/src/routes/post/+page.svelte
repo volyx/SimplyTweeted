@@ -31,6 +31,30 @@
 	$: threadError = validateThreadParts(normalizeThreadParts(parts));
 	$: isValidTweet = !threadError && isDateTimeValid;
 
+	/**
+	 * Per-part figures the markup reads, derived here rather than called from it.
+	 *
+	 * The markup must not call an instance function to decide what to show. The
+	 * compiler emits a tracked read only for state an expression names directly:
+	 * `parts[i]` becomes `get(parts)` followed by an untracked evaluation, while
+	 * `partLength(i)` becomes an untracked call with no tracked read at all, so
+	 * its effect never subscribes to `parts` and never re-runs. That is why the
+	 * counter sat at 0/280 while typing, why the box never turned red, and why
+	 * the over-limit warning holding the split button never appeared -- the
+	 * `{#if}` testing it was frozen too. `+ Add part` was unaffected because the
+	 * `{#each}` tracks `parts` itself, which is what made the fault look like a
+	 * missing button rather than dead reactivity.
+	 *
+	 * These statements name `parts`, so legacy reactivity re-runs them on every
+	 * change, and the markup only ever indexes the results.
+	 */
+	$: partLengths = parts.map((part, i) => formatThreadPart(part, i, parts.length).length);
+	// Only over-long parts need a plan, so a normal keystroke costs no splitting.
+	$: splitPlans = parts.map((_, i) =>
+		partLengths[i] > MAX_TWEET_LENGTH ? splitPlan(i) : []
+	);
+	$: roomForSplit = MAX_THREAD_PARTS - (parts.length - 1) >= 2;
+
 	$: {
 		const now = new Date();
 		// Create the scheduled date/time in the user's local timezone for validation
@@ -54,11 +78,6 @@
 		const next = [...parts];
 		next[index] = value;
 		parts = next;
-	}
-
-	/** Length as X will see it, including the ` 1/3` suffix this part will carry. */
-	function partLength(index: number): number {
-		return formatThreadPart(parts[index], index, parts.length).length;
 	}
 
 	/**
@@ -245,7 +264,7 @@
 									name="parts"
 									value={parts[i]}
 									on:input={(e) => setPart(i, e.currentTarget.value)}
-									class="textarea textarea-bordered w-full text-lg {partLength(i) > MAX_TWEET_LENGTH ? 'textarea-error' : ''} {parts.length > 1 ? 'h-28' : 'h-40'}"
+									class="textarea textarea-bordered w-full text-lg {partLengths[i] > MAX_TWEET_LENGTH ? 'textarea-error' : ''} {parts.length > 1 ? 'h-28' : 'h-40'}"
 									placeholder={i === 0
 										? "What's on your mind? Share your thoughts here..."
 										: `Part ${i + 1} of the thread...`}
@@ -266,40 +285,40 @@
 								{/if}
 							</div>
 
-							<div class="label-text-alt text-right mt-1 {partLength(i) > MAX_TWEET_LENGTH ? 'text-error' : ''}">
-								{partLength(i)}/{MAX_TWEET_LENGTH}
+							<div class="label-text-alt text-right mt-1 {partLengths[i] > MAX_TWEET_LENGTH ? 'text-error' : ''}">
+								{partLengths[i]}/{MAX_TWEET_LENGTH}
 								{#if parts.length > 1}
 									<span class="opacity-60">· posts as “… {i + 1}/{parts.length}”</span>
 								{/if}
 							</div>
 
-							{#if partLength(i) > MAX_TWEET_LENGTH}
-								{@const chunks = splitPlan(i)}
-								{@const threadFull = MAX_THREAD_PARTS - (parts.length - 1) < 2}
+							{#if partLengths[i] > MAX_TWEET_LENGTH}
+								{@const chunks = splitPlans[i]}
+								{@const over = partLengths[i] - MAX_TWEET_LENGTH}
 								{@const total = parts.length - 1 + chunks.length}
 								<!-- chunks is empty when the text is all whitespace: over the limit, but
 								     nothing to split. Guarding here keeps the last-chunk read below safe. -->
-								{@const canSplit = !threadFull && chunks.length > 1}
+								{@const canSplit = roomForSplit && chunks.length > 1}
 								{@const stillOver =
 									canSplit &&
 									formatThreadPart(chunks[chunks.length - 1], total - 1, total).length >
 										MAX_TWEET_LENGTH}
 								<div class="alert alert-warning py-2 mt-1">
 									<div class="flex-1 text-sm">
-										{#if threadFull}
-											This is {partLength(i) - MAX_TWEET_LENGTH} characters over, and the thread is
-											already at its {MAX_THREAD_PARTS}-part maximum. Shorten it, or remove another
-											part to make room.
+										{#if !roomForSplit}
+											This is {over} characters over, and the thread is already at its
+											{MAX_THREAD_PARTS}-part maximum. Shorten it, or remove another part to make
+											room.
 										{:else if !canSplit}
-											This is {partLength(i) - MAX_TWEET_LENGTH} characters over the {MAX_TWEET_LENGTH}-character
-											limit. Shorten it.
+											This is {over} characters over the {MAX_TWEET_LENGTH}-character limit. Shorten
+											it.
 										{:else if stillOver}
-											This is {partLength(i) - MAX_TWEET_LENGTH} characters over — more than
-											{MAX_THREAD_PARTS} parts can hold. Splitting fills the thread and leaves the
-											remainder in part {i + chunks.length} for you to trim.
+											This is {over} characters over — more than {MAX_THREAD_PARTS} parts can hold.
+											Splitting fills the thread and leaves the remainder in part
+											{i + chunks.length} for you to trim.
 										{:else}
-											This is {partLength(i) - MAX_TWEET_LENGTH} characters over. It can be split into
-											{chunks.length} parts at word boundaries.
+											This is {over} characters over. It can be split into {chunks.length} parts at
+											word boundaries.
 										{/if}
 									</div>
 									{#if canSplit}

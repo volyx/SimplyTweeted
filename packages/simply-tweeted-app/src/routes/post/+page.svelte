@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import { browser } from '$app/environment';
 	import {
 		formatThreadPart,
@@ -26,6 +26,8 @@
 	let emojiPickerElement: HTMLElement;
 	let activePartIndex = 0;
 	let userTimezone = '';
+	/** Set when a paste was auto-split, so the new boxes don't appear unexplained. */
+	let pasteNotice: string | null = null;
 
 	// Validate exactly what the server will validate, via the same shared helpers.
 	$: threadError = validateThreadParts(normalizeThreadParts(parts));
@@ -52,14 +54,55 @@
 		return splitThreadText(parts[index], parts.length - 1);
 	}
 
-	/** Replaces an over-long part in place with the chunks it splits into. */
-	function splitPart(index: number) {
+	/** Whether splitting this part would fit inside the thread-length maximum. */
+	function splitFits(index: number, chunks: string[]): boolean {
+		return parts.length - 1 + chunks.length <= MAX_THREAD_PARTS;
+	}
+
+	/**
+	 * Replaces an over-long part in place with the chunks it splits into.
+	 *
+	 * @returns the number of parts it became, or 0 when it was left alone.
+	 */
+	function splitPart(index: number): number {
 		const chunks = splitPreview(index);
-		if (chunks.length < 2) return;
+		// The button is hidden in both these cases, but the paste handler calls this
+		// unattended — so the guards live here rather than only in the markup.
+		if (chunks.length < 2 || !splitFits(index, chunks)) return 0;
 
 		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
 		activePartIndex = index;
 		showEmojiPicker = false;
+		return chunks.length;
+	}
+
+	/**
+	 * Pasting an over-long block is the usual way to end up past the limit, and
+	 * unlike typing there is no half-written sentence to disturb — so split it
+	 * immediately instead of waiting for the button. Deferred to a macrotask
+	 * because `parts[index]` only picks up the pasted text on the `input` event
+	 * that fires after this one.
+	 *
+	 * A paste too long to split (over the {MAX_THREAD_PARTS}-part cap) falls
+	 * through to the existing "shorten it first" warning.
+	 */
+	function handlePaste(index: number) {
+		setTimeout(async () => {
+			if (partLength(index) <= MAX_TWEET_LENGTH) return;
+
+			const count = splitPart(index);
+			if (count === 0) return;
+
+			pasteNotice = `Pasted text was over ${MAX_TWEET_LENGTH} characters — split into ${count} parts.`;
+
+			// Leave the caret where the pasted text now ends, ready to keep typing.
+			await tick();
+			const last = document.getElementById(`part-${index + count - 1}`);
+			if (last instanceof HTMLTextAreaElement) {
+				last.focus();
+				last.setSelectionRange(last.value.length, last.value.length);
+			}
+		});
 	}
 
 	function addPart() {
@@ -143,6 +186,20 @@
 						</span>
 					</label>
 
+					{#if pasteNotice}
+						<div class="alert alert-info py-2 mb-3">
+							<span class="flex-1 text-sm">{pasteNotice}</span>
+							<button
+								type="button"
+								class="btn btn-ghost btn-xs"
+								title="Dismiss"
+								on:click={() => (pasteNotice = null)}
+							>
+								✕
+							</button>
+						</div>
+					{/if}
+
 					{#each parts as _, i}
 						<div class="mb-3">
 							{#if parts.length > 1}
@@ -189,6 +246,7 @@
 										? "What's on your mind? Share your thoughts here..."
 										: `Part ${i + 1} of the thread...`}
 									on:focus={() => (activePartIndex = i)}
+									on:paste={() => handlePaste(i)}
 								></textarea>
 								<button
 									type="button"
@@ -213,7 +271,7 @@
 
 							{#if partLength(i) > MAX_TWEET_LENGTH}
 								{@const chunks = splitPreview(i)}
-								{@const wouldExceedMax = parts.length - 1 + chunks.length > MAX_THREAD_PARTS}
+								{@const wouldExceedMax = !splitFits(i, chunks)}
 								<div class="alert alert-warning py-2 mt-1">
 									<div class="flex-1 text-sm">
 										{#if wouldExceedMax}

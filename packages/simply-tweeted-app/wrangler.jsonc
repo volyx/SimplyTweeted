@@ -34,5 +34,6 @@
 		"enabled": true
 	}
 	// Secrets (wrangler secret put): AUTH_SECRET, DB_ENCRYPTION_KEY,
-	// AUTH_TWITTER_ID, AUTH_TWITTER_SECRET, ALLOWED_TWITTER_ACCOUNTS
+	// AUTH_TWITTER_ID, AUTH_TWITTER_SECRET, ALLOWED_TWITTER_ACCOUNTS, and the
+	// optional ANTHROPIC_API_KEY (absent = the composer's AI split button 501s).
 }

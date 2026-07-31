@@ -26,6 +26,10 @@
 	let emojiPickerElement: HTMLElement;
 	let activePartIndex = 0;
 	let userTimezone = '';
+	/** Index currently being split by the AI, or -1. Only one runs at a time. */
+	let aiSplittingIndex = -1;
+	/** Set when the AI split fell back or failed, so the result is never unexplained. */
+	let aiNotice: string | null = null;
 
 	// Validate exactly what the server will validate, via the same shared helpers.
 	$: threadError = validateThreadParts(normalizeThreadParts(parts));
@@ -102,6 +106,13 @@
 		return [...chunks.slice(0, room - 1), chunks.slice(room - 1).join(' ')];
 	}
 
+	/** Replaces one part in place with the parts it becomes. */
+	function applySplit(index: number, chunks: string[]) {
+		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
+		activePartIndex = index;
+		showEmojiPicker = false;
+	}
+
 	/** Replaces an over-long part in place with the parts it splits into. */
 	function splitPart(index: number) {
 		// room < 2 means the thread is already at its maximum length, so there is
@@ -112,9 +123,46 @@
 		const chunks = splitPlan(index);
 		if (chunks.length < 2) return;
 
-		parts = [...parts.slice(0, index), ...chunks, ...parts.slice(index + 1)];
-		activePartIndex = index;
+		applySplit(index, chunks);
+	}
+
+	/**
+	 * Asks the server to split this part where the meaning breaks, rather than at
+	 * whichever space happens to fall near the limit.
+	 *
+	 * The server validates the model's answer and falls back to the word-boundary
+	 * split on its own, so this always returns something usable — `notice` says so
+	 * when the result is not what was asked for.
+	 */
+	async function aiSplitPart(index: number) {
+		if (aiSplittingIndex !== -1) return;
+
+		aiSplittingIndex = index;
+		aiNotice = null;
 		showEmojiPicker = false;
+
+		try {
+			const response = await fetch('/post/ai-split', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ text: parts[index], otherParts: parts.length - 1 })
+			});
+			const result = await response.json();
+
+			if (!response.ok) {
+				aiNotice = result?.error ?? 'The AI split failed.';
+				return;
+			}
+
+			if (Array.isArray(result.parts) && result.parts.length > 1) {
+				applySplit(index, result.parts);
+			}
+			aiNotice = result.notice ?? null;
+		} catch {
+			aiNotice = 'Could not reach the AI split. Check your connection and try again.';
+		} finally {
+			aiSplittingIndex = -1;
+		}
 	}
 
 	function addPart() {
@@ -222,6 +270,20 @@
 						</span>
 					</label>
 
+					{#if aiNotice}
+						<div class="alert alert-info py-2 mb-3">
+							<span class="flex-1 text-sm">{aiNotice}</span>
+							<button
+								type="button"
+								class="btn btn-ghost btn-xs"
+								title="Dismiss"
+								on:click={() => (aiNotice = null)}
+							>
+								✕
+							</button>
+						</div>
+					{/if}
+
 					{#each parts as _, i}
 						<div class="mb-3">
 							{#if parts.length > 1}
@@ -322,9 +384,25 @@
 										{/if}
 									</div>
 									{#if canSplit}
-										<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
-											Split into {chunks.length} parts
-										</button>
+										<div class="flex flex-col gap-1 sm:flex-row">
+											<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
+												Split into {chunks.length} parts
+											</button>
+											<button
+												type="button"
+												class="btn btn-sm btn-primary"
+												disabled={aiSplittingIndex !== -1}
+												title="Let AI choose where the thread should break"
+												on:click={() => aiSplitPart(i)}
+											>
+												{#if aiSplittingIndex === i}
+													<span class="loading loading-spinner loading-xs"></span>
+													Splitting…
+												{:else}
+													✨ Split with AI
+												{/if}
+											</button>
+										</div>
 									{/if}
 								</div>
 							{/if}

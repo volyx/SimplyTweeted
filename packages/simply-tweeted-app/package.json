@@ -31,6 +31,7 @@
 		"wrangler": "^4.16.0"
 	},
 	"dependencies": {
+		"@anthropic-ai/sdk": "^0.115.0",
 		"@auth/sveltekit": "^1.9.2",
 		"daisyui": "^5.0.35",
 		"date-fns-tz": "^3.2.0",

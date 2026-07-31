@@ -38,6 +38,24 @@
 		isDateTimeValid = scheduledDateTime > now;
 	}
 
+	/**
+	 * Writes a box's text into state by replacing the array, not by mutating it.
+	 *
+	 * `bind:value={parts[i]}` compiles to an in-place `parts[i] = value` plus a
+	 * mutation notice. That reported as not reaching the counter — typing left it
+	 * at 0/280 — while `+ Add part`, which assigns a whole new array, updated the
+	 * UI immediately. Both routes are meant to be equivalent, so rather than rely
+	 * on the one that misbehaved, every write now takes the assignment path that
+	 * demonstrably works.
+	 */
+	function setPart(index: number, value: string) {
+		if (parts[index] === value) return;
+
+		const next = [...parts];
+		next[index] = value;
+		parts = next;
+	}
+
 	/** Length as X will see it, including the ` 1/3` suffix this part will carry. */
 	function partLength(index: number): number {
 		return formatThreadPart(parts[index], index, parts.length).length;
@@ -225,13 +243,14 @@
 								<textarea
 									id="part-{i}"
 									name="parts"
-									bind:value={parts[i]}
+									value={parts[i]}
+									on:input={(e) => setPart(i, e.currentTarget.value)}
 									class="textarea textarea-bordered w-full text-lg {partLength(i) > MAX_TWEET_LENGTH ? 'textarea-error' : ''} {parts.length > 1 ? 'h-28' : 'h-40'}"
 									placeholder={i === 0
 										? "What's on your mind? Share your thoughts here..."
 										: `Part ${i + 1} of the thread...`}
 									on:focus={() => (activePartIndex = i)}
-									on:change={(e) => (parts[i] = e.currentTarget.value)}
+									on:change={(e) => setPart(i, e.currentTarget.value)}
 								></textarea>
 								<button
 									type="button"

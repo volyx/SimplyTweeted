@@ -125,8 +125,32 @@
 		}
 	}
 
+	/**
+	 * Adopts whatever the browser put in the boxes before Svelte took over.
+	 *
+	 * On a reload, browsers restore previously typed textarea contents, and that
+	 * happens outside Svelte — no `input` event, so `parts` stays as it was
+	 * initialised while the boxes visibly hold text. Everything downstream reads
+	 * `parts`, so the counter shows 0/280, the over-limit warning and its split
+	 * button never appear, and submitting posts text the client believed was not
+	 * there. Reading the DOM once on mount puts state back in charge.
+	 */
+	function adoptRestoredValues() {
+		const boxes = Array.from(
+			document.querySelectorAll<HTMLTextAreaElement>('textarea[name="parts"]')
+		);
+		if (boxes.length === 0) return;
+
+		const restored = boxes.map((box) => box.value);
+		if (restored.some((value, i) => value !== parts[i])) {
+			parts = restored;
+		}
+	}
+
 	onMount(async () => {
 		if (browser) {
+			adoptRestoredValues();
+
 			await import('emoji-picker-element');
 			window.addEventListener('click', handleClickOutside, true);
 
@@ -207,6 +231,7 @@
 										? "What's on your mind? Share your thoughts here..."
 										: `Part ${i + 1} of the thread...`}
 									on:focus={() => (activePartIndex = i)}
+									on:change={(e) => (parts[i] = e.currentTarget.value)}
 								></textarea>
 								<button
 									type="button"

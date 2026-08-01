@@ -1,4 +1,4 @@
-import type { UserAccount } from 'shared-lib';
+import type { PostHeadroom, UserAccount } from 'shared-lib';
 import type { DatabaseClient } from 'shared-lib/backend';
 import { log } from './logger.js';
 
@@ -115,6 +115,40 @@ export class XClient {
    * @returns the id of the created post — required to chain the next part of a
    *   thread.
    */
+  /**
+   * The most recent 24h posting figures X reported, or null if it has not said.
+   *
+   * Kept on the client rather than returned from postTweet so the caller can
+   * persist once per run instead of once per part. Each part is a subrequest and
+   * a thread already costs 2n+2 against the free plan's 50.
+   */
+  lastHeadroom: PostHeadroom | null = null;
+
+  /** Reads the x-user-limit-24hour-* headers X attaches to a successful post. */
+  private captureHeadroom(response: Response, id: string): void {
+    const remaining = response.headers.get('x-user-limit-24hour-remaining');
+    if (remaining === null) {
+      return;
+    }
+
+    const limit = response.headers.get('x-user-limit-24hour-limit');
+    const reset = response.headers.get('x-user-limit-24hour-reset');
+
+    this.lastHeadroom = {
+      remaining: Number(remaining),
+      limit: limit === null ? null : Number(limit),
+      // X sends the reset as epoch *seconds*; everything stored here is ms.
+      resetAt: reset === null ? null : Number(reset) * 1000,
+      observedAt: Date.now()
+    };
+
+    log.info(`Posted ${id}; X reports ${remaining} posts remaining in the 24h window`, {
+      tweetId: id,
+      remaining,
+      limit
+    });
+  }
+
   async postTweet(
     accessToken: string,
     text: string,
@@ -165,13 +199,7 @@ export class XClient {
       throw new XApiError(response.status, `success response had no data.id: ${body.slice(0, 200)}`);
     }
 
-    const remaining = response.headers.get('x-user-limit-24hour-remaining');
-    if (remaining !== null) {
-      log.info(`Posted ${id}; X reports ${remaining} posts remaining in the 24h window`, {
-        tweetId: id,
-        remaining
-      });
-    }
+    this.captureHeadroom(response, id);
 
     return id;
   }

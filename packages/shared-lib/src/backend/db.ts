@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { D1Database } from '@cloudflare/workers-types';
-import { TweetStatus, Tweet, UserAccount } from '../types/types.js';
+import { TweetStatus, Tweet, UserAccount, PostHeadroom } from '../types/types.js';
 import { EncryptionService } from './encryption.js';
 
 /**
@@ -301,6 +301,61 @@ class DatabaseClient {
   }
 
   // Get user account with decrypted tokens
+  /**
+   * Stores what X last said about the account's remaining daily posts.
+   *
+   * Written once per run rather than once per post: each write is a subrequest,
+   * and a thread already costs 2n+2 against the free plan's cap of 50.
+   */
+  async savePostHeadroom(userId: string, provider: string, headroom: PostHeadroom): Promise<void> {
+    await this.withRetry('savePostHeadroom', () =>
+      this.db
+        .prepare(
+          `UPDATE accounts
+              SET postsRemaining = ?3, postsLimit = ?4, postsResetAt = ?5, postsObservedAt = ?6
+            WHERE userId = ?1 AND provider = ?2`
+        )
+        .bind(
+          userId,
+          provider,
+          headroom.remaining,
+          headroom.limit,
+          headroom.resetAt,
+          headroom.observedAt
+        )
+        .run()
+    );
+  }
+
+  /** The stored figures, or null when the account has not posted since this shipped. */
+  async getPostHeadroom(userId: string, provider: string): Promise<PostHeadroom | null> {
+    const row = await this.withRetry('getPostHeadroom', () =>
+      this.db
+        .prepare(
+          `SELECT postsRemaining, postsLimit, postsResetAt, postsObservedAt
+             FROM accounts WHERE userId = ?1 AND provider = ?2`
+        )
+        .bind(userId, provider)
+        .first<{
+          postsRemaining: number | null;
+          postsLimit: number | null;
+          postsResetAt: number | null;
+          postsObservedAt: number | null;
+        }>()
+    );
+
+    if (!row || row.postsRemaining === null || row.postsObservedAt === null) {
+      return null;
+    }
+
+    return {
+      remaining: row.postsRemaining,
+      limit: row.postsLimit,
+      resetAt: row.postsResetAt,
+      observedAt: row.postsObservedAt
+    };
+  }
+
   async getUserAccount(userId: string, provider: string): Promise<UserAccount | null> {
     const row = await this.withRetry('getUserAccount', () =>
       this.db

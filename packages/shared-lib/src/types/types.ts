@@ -38,3 +38,12 @@ export interface Tweet {
   /** X post ids already created for this row, in order. Drives resume. */
   postedIds?: string[];
 } 
+/** What X last reported about an account's remaining posts in the 24h window. */
+export interface PostHeadroom {
+  remaining: number;
+  limit: number | null;
+  /** Epoch ms when the window rolls over, if X said. */
+  resetAt: number | null;
+  /** Epoch ms the figures were observed, so staleness can be shown. */
+  observedAt: number;
+}

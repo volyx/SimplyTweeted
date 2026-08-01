@@ -229,6 +229,11 @@ export class TweetProcessor {
           );
         }
       }
+      // One write per run, not per post: the figures only change as a result of
+      // the posts just made, and each write costs a subrequest.
+      if (this.xClient.lastHeadroom) {
+        await this.dbClient.savePostHeadroom(userId, 'twitter', this.xClient.lastHeadroom);
+      }
     } catch (error) {
       // Catch errors related to fetching user accounts or refreshing the token
       const errorMessage = error instanceof Error ? error.message : String(error);

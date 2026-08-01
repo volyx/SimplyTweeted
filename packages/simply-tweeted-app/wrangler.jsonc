@@ -30,14 +30,6 @@
 			"migrations_dir": "../../migrations"
 		}
 	],
-	// Workers AI, for the composer's "Split with AI" button. Inference runs on
-	// Cloudflare's GPUs — no API key, and the request never leaves the platform.
-	// `remote: true` points local `wrangler dev` at real inference, because there
-	// are no models in the local runtime.
-	"ai": {
-		"binding": "AI",
-		"remote": true
-	},
 	"observability": {
 		"enabled": true
 	}

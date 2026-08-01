@@ -53,13 +53,19 @@ export const load = async (event: RequestEvent) => {
 
 export const actions: Actions = {
 	default: async ({ request, locals, platform }) => {
+		// Wall-clock per phase. On Workers the clock only advances across I/O, which
+		// is exactly what is being measured here — each number is real waiting.
+		const startedAt = Date.now();
 		const session = await locals.auth();
+		const authMs = Date.now() - startedAt;
 		
 		if (!session || !session.user) {
 			throw redirect(303, '/login');
 		}
 		
+		const formStartedAt = Date.now();
 		const formData = await request.formData();
+		const formMs = Date.now() - formStartedAt;
 		// The composer renders one textarea per part, all named `parts`, so getAll
 		// returns them in document order.
 		const parts = normalizeThreadParts(formData.getAll('parts').map((part) => String(part)));
@@ -99,7 +105,17 @@ export const actions: Actions = {
 				parts: parts.length > 1 ? parts : undefined
 			};
 
+			const saveStartedAt = Date.now();
 			await getDb(platform).saveTweet(tweet);
+
+			log.info('Scheduled a tweet', {
+				parts: parts.length,
+				chars: tweet.content.length,
+				authMs,
+				formMs,
+				saveMs: Date.now() - saveStartedAt,
+				totalMs: Date.now() - startedAt
+			});
 		} catch (error) {
 			log.error('Failed to save tweet:', {
 				userId: session.user.id,

@@ -7,7 +7,10 @@ import { log } from '$lib/server/logger.js';
 const TWEETS_PER_PAGE = 10;
 
 export const load: PageServerLoad = async ({ locals, url, platform }) => {
+	// The action redirects here, so this load is part of the wait the user feels.
+	const startedAt = Date.now();
 	const session = await locals.auth();
+	const authMs = Date.now() - startedAt;
 	if (!session?.user?.id) {
 		throw redirect(303, '/signin');
 	}
@@ -22,10 +25,18 @@ export const load: PageServerLoad = async ({ locals, url, platform }) => {
 	try {
 		const db = getDb(platform);
 		// Use the generic utility functions from db for cleaner code
+		const queryStartedAt = Date.now();
 		const [tweets, totalTweets] = await Promise.all([
 			db.getTweets(userId, page, TWEETS_PER_PAGE, pendingStatuses, 1),
 			db.countTweets(userId, pendingStatuses)
 		]);
+
+		log.info('Scheduled list loaded', {
+			tweets: tweets.length,
+			authMs,
+			queryMs: Date.now() - queryStartedAt,
+			totalMs: Date.now() - startedAt
+		});
 
 		return {
 			tweets,

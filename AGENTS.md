@@ -4,20 +4,38 @@ Notes for coding agents working in this repo.
 
 ## Version control: use `jj`, not `git`
 
-Prefer [Jujutsu](https://jj-vcs.github.io/jj/) for version-control work here —
+Use [Jujutsu](https://jj-vcs.github.io/jj/) for version-control work here —
 `jj status`, `jj diff`, `jj describe`, `jj commit`, `jj git push`. Fall back to
 `git` only for operations jj has no equivalent for.
 
-**Not yet usable as of 2026-08-01.** `jj` is not installed on this machine and
-the repo has no `.jj` directory, so agents currently fall back to `git`. To
-switch it on:
+The repo is colocated (`jj git init --colocate`), so `.git` and `.jj` sit side
+by side and git commands still work on the same history. `.jj` hides itself from
+git via a `/*` gitignore inside it — it does not belong in the repo's own
+`.gitignore`.
+
+There is no `jj push`. Publish with `jj git push`, and move the bookmark first —
+a new commit does not advance `main` on its own:
 
 ```sh
-brew install jj
-jj git init --colocate    # keeps .git working alongside .jj
+jj commit -m "…"
+jj bookmark set main -r @-
+jj git push --remote fork --bookmark main
 ```
 
-Once `.jj` exists, use jj commands and delete this paragraph.
+## Commits are signed — and jj does not sign by default
+
+Git here signs every commit (`commit.gpgsign=true`, `gpg.format=ssh`, global
+config). **jj ships with `signing.behavior = "keep"` and `signing.backend =
+"none"`**, so an unconfigured jj would silently produce unsigned commits in a
+repo where everything else is signed. The user-level jj config now mirrors git:
+
+```
+signing.behavior = "own"
+signing.backend  = "ssh"
+signing.key      = ~/.ssh/secretive_signing.pub
+```
+
+Check with `jj config list signing` if commits start showing up unsigned.
 
 ## Commits need a Touch ID approval
 

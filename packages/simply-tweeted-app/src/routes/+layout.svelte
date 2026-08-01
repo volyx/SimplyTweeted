@@ -1,10 +1,29 @@
 <script lang="ts">
 	import '../app.css';
-	import { page } from '$app/stores';
+	import { page, updated } from '$app/stores';
+	import { beforeNavigate } from '$app/navigation';
 	import { signOut } from '@auth/sveltekit/client';
 
 	let { children } = $props();
 
+	/**
+	 * Survive a deploy that happens while the page is open.
+	 *
+	 * Every build hashes its JS afresh and the previous chunks stop being served,
+	 * so a tab left open across a deploy still holds the old filenames. The next
+	 * client-side navigation asks for a chunk that no longer exists and fails with
+	 * `Failed to fetch dynamically imported module`, leaving the app stuck.
+	 *
+	 * `updated` goes true once SvelteKit notices a new build. Turning that
+	 * navigation into a full page load fetches the current HTML and its current
+	 * chunk names, which is the only way back to a working page.
+	 */
+	beforeNavigate((navigation) => {
+		if ($updated && navigation.to?.url && !navigation.willUnload) {
+			navigation.cancel();
+			location.href = navigation.to.url.href;
+		}
+	});
 </script>
 
 <div class="drawer lg:drawer-open">

@@ -94,13 +94,40 @@ function collapse(text: string): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Every part must fit once its ` n/total` suffix is added, and the thread must fit. */
-function isUsable(parts: string[], otherParts: number): boolean {
-	const total = otherParts + parts.length;
-	if (parts.length < 1 || total > MAX_THREAD_PARTS) return false;
-
+/** Whether a part fits once the widest possible ` n/total` suffix is added. */
+function fits(part: string, total: number): boolean {
 	// total - 1 is the worst-case index: same digit count as total.
-	return parts.every((part) => formatThreadPart(part, total - 1, total).length <= MAX_TWEET_LENGTH);
+	return formatThreadPart(part, total - 1, total).length <= MAX_TWEET_LENGTH;
+}
+
+/**
+ * Repairs an answer that is right about boundaries but wrong about length.
+ *
+ * A model cannot count characters reliably, and a sentence longer than the
+ * budget cannot be kept whole however well it reasons — this draft had a
+ * 296-character one. Rejecting the whole answer for that threw away every good
+ * sentence break in it and fell back to cutting all of them mid-clause, which
+ * is worse in exactly the way the feature exists to avoid.
+ *
+ * So only the over-long parts get re-split, deterministically, and the rest of
+ * the model's boundaries are kept. Splitting each against a full-length thread
+ * is deliberately conservative: it costs a few characters per part and can
+ * never produce something the caller has to reject.
+ */
+function repairOverlongParts(parts: string[]): { parts: string[]; repaired: number } {
+	const out: string[] = [];
+	let repaired = 0;
+
+	for (const part of parts) {
+		if (fits(part, MAX_THREAD_PARTS)) {
+			out.push(part);
+			continue;
+		}
+		repaired++;
+		out.push(...splitThreadText(part, MAX_THREAD_PARTS - 1));
+	}
+
+	return { parts: out, repaired };
 }
 
 /** JSON mode returns either a parsed object or the JSON as a string, depending on model. */
@@ -210,11 +237,36 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		});
 	}
 
-	if (!isUsable(parts, otherParts)) {
+	if (parts.length < 1) {
+		log.warn('AI split returned no parts');
 		return json({
 			parts: deterministic,
 			source: 'fallback',
-			notice: 'The AI split did not fit the character limit, so word boundaries were used instead.'
+			notice: 'The AI returned nothing to split, so word boundaries were used instead.'
+		});
+	}
+
+	const { parts: repairedParts, repaired } = repairOverlongParts(parts);
+	if (repaired > 0) {
+		log.info('AI split had over-long parts, re-split those', {
+			repaired,
+			before: parts.length,
+			after: repairedParts.length,
+			longest: Math.max(...parts.map((part) => part.length))
+		});
+	}
+	parts = repairedParts;
+
+	// Only length the thread cannot hold is unrecoverable.
+	if (otherParts + parts.length > MAX_THREAD_PARTS) {
+		log.warn('AI split needed more parts than the thread allows', {
+			needed: otherParts + parts.length,
+			max: MAX_THREAD_PARTS
+		});
+		return json({
+			parts: deterministic,
+			source: 'fallback',
+			notice: `The AI split needed more than ${MAX_THREAD_PARTS} parts, so word boundaries were used instead.`
 		});
 	}
 
@@ -228,5 +280,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		});
 	}
 
-	return json({ parts, source: 'ai' });
+	log.info('AI split applied', { parts: parts.length, repaired });
+
+	return json({
+		parts,
+		source: 'ai',
+		notice:
+			repaired > 0
+				? `AI split this into ${parts.length} parts. ${repaired === 1 ? 'One sentence was' : `${repaired} sentences were`} longer than a tweet, so ${repaired === 1 ? 'it' : 'they'} had to be broken mid-sentence.`
+				: undefined
+	});
 };

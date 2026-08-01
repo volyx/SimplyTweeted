@@ -157,7 +157,16 @@
 			if (Array.isArray(result.parts) && result.parts.length > 1) {
 				applySplit(index, result.parts);
 			}
-			aiNotice = result.notice ?? null;
+
+			// Always say which split produced this. A silent success was
+			// indistinguishable from having pressed the word-boundary button, which
+			// made "the AI still cuts sentences" impossible to tell apart from "the
+			// AI never ran".
+			aiNotice =
+				result.notice ??
+				(result.source === 'ai'
+					? `AI split this into ${result.parts?.length ?? 0} parts.`
+					: null);
 		} catch {
 			aiNotice = 'Could not reach the AI split. Check your connection and try again.';
 		} finally {
@@ -385,8 +394,13 @@
 									</div>
 									{#if canSplit}
 										<div class="flex flex-col gap-1 sm:flex-row">
-											<button type="button" class="btn btn-sm" on:click={() => splitPart(i)}>
-												Split into {chunks.length} parts
+											<button
+												type="button"
+												class="btn btn-sm btn-outline"
+												title="Breaks at the last space that fits — instant, but it will cut sentences"
+												on:click={() => splitPart(i)}
+											>
+												Split at word boundaries ({chunks.length})
 											</button>
 											<button
 												type="button"

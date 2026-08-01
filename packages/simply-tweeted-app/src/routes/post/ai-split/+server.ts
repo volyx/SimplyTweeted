@@ -41,17 +41,51 @@ const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
  */
 const PART_BUDGET = MAX_TWEET_LENGTH - ` ${MAX_THREAD_PARTS}/${MAX_THREAD_PARTS}`.length;
 
-const SYSTEM = `You split text into the parts of an X (Twitter) thread.
+const SYSTEM = `You split a long piece of text into the parts of an X (Twitter)
+thread, so that every part reads like something a person wrote on purpose.
 
-You split only. Never reword, rewrite, summarise, translate, reorder, or add
-anything of your own — no numbering, no "cont.", no linking phrases. Concatenating
-your parts in order with a single space between them must reproduce the input text
-exactly, character for character apart from the whitespace at the joins.
+# Never change the words
+Split only. Never reword, rewrite, summarise, translate, reorder, correct
+spelling, or add anything of your own — no numbering, no "cont.", no "(1/5)", no
+linking phrases. Concatenating your parts in order with a single space between
+them must reproduce the input exactly, character for character apart from the
+whitespace at the joins. If you cannot manage that, return fewer parts rather
+than alter a single word.
 
-Break where a reader would want a pause: between complete thoughts, at sentence
-ends, before a contrast or a new example. Prefer a slightly short part over one
-that splits a clause, a quoted phrase, or a URL. The first part should stand alone
-well enough to make someone want the next.
+# End parts at sentence boundaries
+A part ends where a sentence ends. Never end a part mid-sentence, mid-clause,
+inside a quotation, inside a URL, or between a number and its unit.
+
+The one exception is a single sentence longer than the character limit. Only
+then may you break inside it, at the strongest punctuation available — an em
+dash, semicolon or colon before a comma — and never immediately after "and",
+"but", "of", "to", "the", or any other word that leaves the reader hanging.
+
+# Keep what belongs together in one part
+- A claim and the example that supports it; a question and its answer; a setup
+  and its punchline.
+- An enumeration — "First… Second… Third…" — unless it cannot fit.
+- A blank line in the input is the author's own paragraph break. Prefer to split
+  there over anywhere else, and never merge across one unless the parts either
+  side are too small to stand alone.
+- Never leave a short closing line alone as the final part. Attach it to the
+  part before it if it fits.
+
+# Balance the parts
+Aim for parts of roughly similar length rather than filling each to the limit
+and leaving a stub at the end. A part that is 60% full and ends cleanly is
+better than one that is 99% full and ends on a comma. Use the fewest parts that
+read well — do not split text that already fits.
+
+# Each part must stand up
+The first part has to make sense alone and give a reason to read the next. Every
+later part should be readable without re-reading the one before it.
+
+# Example
+Input: "Ship early. It teaches you what users actually want, which is rarely what
+you assumed. The hard part is not building — it's deleting the thing you were
+proud of."
+Output: {"parts": ["Ship early. It teaches you what users actually want, which is rarely what you assumed.", "The hard part is not building — it's deleting the thing you were proud of."]}
 
 Reply with JSON only.`;
 
@@ -147,11 +181,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				{
 					role: 'user',
 					content: [
-						`Split the text below into between ${Math.min(deterministic.length, room)} and ${room} parts.`,
-						`Each part must be at most ${PART_BUDGET} characters.`,
+						`Split the text below into at least ${Math.min(deterministic.length, room)} and at most ${room} parts —`,
+						'the fewest that let every part end at a sentence boundary.',
+						`Each part must be at most ${PART_BUDGET} characters, counted after trimming.`,
 						otherParts > 0
 							? `It joins a thread that already has ${otherParts} other ${otherParts === 1 ? 'part' : 'parts'}.`
 							: '',
+						'',
+						'Any blank line below is the author\'s own paragraph break — split there by preference.',
 						'',
 						'<text>',
 						text,

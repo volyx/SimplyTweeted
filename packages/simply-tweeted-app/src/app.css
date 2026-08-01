@@ -1,2 +1,112 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+/**
+ * X's visual language as a DaisyUI theme.
+ *
+ * Every component in the app is a DaisyUI one, so defining the palette, radii
+ * and type here restyles buttons, cards, inputs, alerts, menus and the drawer
+ * at once — rather than editing class lists on every page and letting them
+ * drift apart later.
+ *
+ * The values are X's dark "Lights out" scheme: pure black canvas, #16181C for
+ * raised surfaces, #2F3336 hairline borders, #1D9BF0 for anything actionable.
+ * Buttons and inputs are fully rounded because that pill shape is the most
+ * recognisable thing about the interface.
+ */
+@plugin "daisyui/theme" {
+  name: "x";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: #000000;
+  --color-base-200: #16181c;
+  --color-base-300: #2f3336;
+  --color-base-content: #e7e9ea;
+
+  --color-primary: #1d9bf0;
+  --color-primary-content: #ffffff;
+
+  --color-secondary: #16181c;
+  --color-secondary-content: #e7e9ea;
+
+  --color-accent: #1d9bf0;
+  --color-accent-content: #ffffff;
+
+  --color-neutral: #16181c;
+  --color-neutral-content: #e7e9ea;
+
+  --color-info: #1d9bf0;
+  --color-info-content: #ffffff;
+
+  --color-success: #00ba7c;
+  --color-success-content: #ffffff;
+
+  --color-warning: #ffd400;
+  --color-warning-content: #000000;
+
+  --color-error: #f4212e;
+  --color-error-content: #ffffff;
+
+  /* Pills for buttons and inputs; 16px corners on cards, as X uses. */
+  --radius-selector: 9999px;
+  --radius-field: 9999px;
+  --radius-box: 1rem;
+
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/**
+ * Chirp is X's own face and is not licensed for redistribution, so this is the
+ * stack X itself falls back to — which is what most visitors already see.
+ */
+:root {
+  --font-x: "TwitterChirp", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+html,
+body {
+  font-family: var(--font-x);
+  background-color: var(--color-base-100);
+}
+
+/* X separates regions with hairlines, never with drop shadows. */
+.card,
+.navbar,
+.footer,
+.stats {
+  box-shadow: none !important;
+}
+
+.card {
+  border: 1px solid var(--color-base-300);
+}
+
+/* Its nav rows are oversized pills that fill on hover. */
+.menu :where(li > a),
+.menu :where(li > button) {
+  border-radius: 9999px;
+  font-size: 1.0625rem;
+}
+
+.menu :where(li > a):hover,
+.menu :where(li > button):hover {
+  background-color: var(--color-base-200);
+}
+
+/* The composer is a writing surface there, not a framed box. */
+textarea.textarea {
+  background-color: transparent;
+  font-size: 1.25rem;
+}
+
+textarea.textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}

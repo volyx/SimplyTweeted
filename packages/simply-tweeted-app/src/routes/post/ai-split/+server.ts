@@ -130,6 +130,114 @@ function repairOverlongParts(parts: string[]): { parts: string[]; repaired: numb
 	return { parts: out, repaired };
 }
 
+/** Below this, a part reads as an orphan rather than a deliberate short line. */
+const STUB_LENGTH = 60;
+
+/**
+ * Folds an orphaned fragment into its neighbour.
+ *
+ * Re-splitting an over-long sentence leaves whatever did not fit as its own
+ * part, which can be a few words — a 23-character part sat mid-thread in
+ * testing. Merging is safe here for the same reason it is safe when getting
+ * under the cap: joining two parts cannot move a break to a worse place, it
+ * only removes one.
+ */
+function absorbStubs(parts: string[]): string[] {
+	const out: string[] = [];
+
+	for (const part of parts) {
+		const previous = out[out.length - 1];
+		const orphaned = part.length < STUB_LENGTH || (previous?.length ?? Infinity) < STUB_LENGTH;
+
+		if (previous !== undefined && orphaned && fits(`${previous} ${part}`, MAX_THREAD_PARTS)) {
+			out[out.length - 1] = `${previous} ${part}`;
+			continue;
+		}
+		out.push(part);
+	}
+
+	return out;
+}
+
+/** Offsets in `text` immediately after a sentence ends, closing quotes included. */
+function sentenceEnds(text: string): number[] {
+	const ends: number[] = [];
+	const pattern = /[.!?…][")'”»\]]*\s+/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		ends.push(match.index + match[0].length);
+	}
+	return ends;
+}
+
+/** Offsets immediately after any run of whitespace — the last-resort cut points. */
+function wordEnds(text: string): number[] {
+	const ends: number[] = [];
+	const pattern = /\s+/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		ends.push(match.index + match[0].length);
+	}
+	return ends;
+}
+
+/** The candidate nearest `target`, or null if none lies within `window`. */
+function nearest(target: number, candidates: number[], window: number): number | null {
+	let best: number | null = null;
+	let bestDistance = Infinity;
+	for (const candidate of candidates) {
+		const distance = Math.abs(candidate - target);
+		if (distance <= window && distance < bestDistance) {
+			best = candidate;
+			bestDistance = distance;
+		}
+	}
+	return best;
+}
+
+/**
+ * Cuts the *original* text where the model chose to break it.
+ *
+ * The model is a good judge of where a thread should break and an unreliable
+ * transcriber of what it breaks: on this draft it merged and re-split correctly
+ * and still came back having inserted a comma, which the verbatim guard rightly
+ * rejected — leaving the user with word boundaries. Tightening the prompt failed
+ * twice, so the model's text is no longer used at all.
+ *
+ * Only the *positions* survive: each part's cumulative length gives an
+ * approximate offset, that offset snaps to the nearest real sentence end in the
+ * original, and the original is sliced there. Any rewording changes the offsets
+ * slightly, which snapping absorbs, and cannot reach the output — the parts are
+ * substrings of the input by construction.
+ */
+function cutAtModelBoundaries(text: string, modelParts: string[]): string[] {
+	const ends = sentenceEnds(text);
+	const words = wordEnds(text);
+
+	const cuts: number[] = [];
+	let offset = 0;
+	for (const part of modelParts.slice(0, -1)) {
+		offset += part.length + 1; // +1 for the space the parts are joined by
+		if (offset >= text.length) break;
+
+		// A sentence end well away from the target still beats a mid-clause cut, so
+		// the sentence window is wide and the whitespace fallback deliberately tight.
+		const cut = nearest(offset, ends, 140) ?? nearest(offset, words, 60) ?? offset;
+		const previous = cuts[cuts.length - 1] ?? 0;
+		if (cut > previous && cut < text.length) cuts.push(cut);
+	}
+
+	const parts: string[] = [];
+	let start = 0;
+	for (const cut of cuts) {
+		parts.push(text.slice(start, cut).trim());
+		start = cut;
+	}
+	parts.push(text.slice(start).trim());
+
+	return parts.filter((part) => part.length > 0);
+}
+
 /** JSON mode returns either a parsed object or the JSON as a string, depending on model. */
 function readParts(response: unknown): string[] {
 	const payload = typeof response === 'string' ? JSON.parse(response) : response;
@@ -215,7 +323,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		});
 	}
 
-	let parts: string[] = [];
+	let modelParts: string[] = [];
 	try {
 		const result = await ai.run(MODEL, {
 			// temperature 0: the same draft should split the same way twice.
@@ -260,7 +368,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			]
 		});
 
-		parts = readParts((result as { response?: unknown }).response);
+		modelParts = readParts((result as { response?: unknown }).response);
 	} catch (error) {
 		log.error('AI split request failed', { error, model: MODEL });
 		return json({
@@ -270,14 +378,18 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		});
 	}
 
-	if (parts.length < 1) {
-		log.warn('AI split returned no parts');
+	if (modelParts.length < 2) {
+		log.warn('AI split returned nothing to work with', { parts: modelParts.length });
 		return json({
 			parts: deterministic,
 			source: 'fallback',
 			notice: 'The AI returned nothing to split, so word boundaries were used instead.'
 		});
 	}
+
+	// The model's boundaries, applied to the original text. Its wording never
+	// reaches the output, so it cannot alter what the user wrote.
+	let parts = cutAtModelBoundaries(text, modelParts);
 
 	const { parts: repairedParts, repaired } = repairOverlongParts(parts);
 	if (repaired > 0) {
@@ -288,7 +400,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			longest: Math.max(...parts.map((part) => part.length))
 		});
 	}
-	parts = repairedParts;
+	parts = absorbStubs(repairedParts);
 
 	// Too many parts is recoverable in the other direction: joining two parts that
 	// each end at a sentence boundary leaves a part that also ends at one, so

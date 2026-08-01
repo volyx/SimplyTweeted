@@ -75,6 +75,145 @@ function splitAtWordBoundaries(text: string, budget: number): string[] {
 }
 
 /**
+ * A piece of text plus the whitespace that followed it in the original.
+ *
+ * Carrying the separator is what lets two units rejoin exactly as they were
+ * written — a blank line between paragraphs stays a blank line instead of
+ * collapsing to a space.
+ */
+interface Unit {
+  text: string;
+  separator: string;
+}
+
+/**
+ * Splits on blank lines — the author's own paragraph divisions.
+ *
+ * Only a *blank* line counts. A single newline is as often a soft wrap sitting
+ * inside a sentence ("я больше не\nработаю с огромными системами") and breaking
+ * there produces exactly the mid-sentence cut this ordering exists to avoid.
+ * Single newlines are still used, but below sentences rather than above them.
+ */
+function segmentParagraphs(text: string): Unit[] {
+  const units: Unit[] = [];
+  const pattern = /\n[ \t]*\n[ \t\n]*/g;
+
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    units.push({ text: text.slice(start, match.index), separator: match[0] });
+    start = match.index + match[0].length;
+  }
+  units.push({ text: text.slice(start), separator: '' });
+
+  return units.filter((unit) => unit.text.trim().length > 0);
+}
+
+/**
+ * Splits on sentence ends: terminal punctuation, any closing bracket or quote
+ * after it, then whitespace.
+ *
+ * Requiring the whitespace is what keeps `x.com/watch?v=abc` in one piece — the
+ * dots and question marks inside a URL are never followed by a space.
+ */
+function segmentSentences(text: string): Unit[] {
+  const units: Unit[] = [];
+  const pattern = /(?<=[.!?…][)"'”»\]]*)\s+/g;
+
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    units.push({ text: text.slice(start, match.index), separator: match[0] });
+    start = match.index + match[0].length;
+  }
+  units.push({ text: text.slice(start), separator: '' });
+
+  return units.filter((unit) => unit.text.trim().length > 0);
+}
+
+/** Splits on single line breaks — softer than a paragraph, firmer than a space. */
+function segmentLines(text: string): Unit[] {
+  const units: Unit[] = [];
+  const pattern = /\n[ \t]*/g;
+
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    units.push({ text: text.slice(start, match.index), separator: match[0] });
+    start = match.index + match[0].length;
+  }
+  units.push({ text: text.slice(start), separator: '' });
+
+  return units.filter((unit) => unit.text.trim().length > 0);
+}
+
+/**
+ * Packs units into parts, splitting any single unit that cannot fit on its own.
+ *
+ * Greedy is right here: a unit is only carried to the next part when it cannot
+ * fit in the current one, so the author's divisions survive wherever the budget
+ * allows.
+ */
+function packUnits(units: Unit[], budget: number, breakUp: (text: string) => string[]): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let pending = '';
+
+  for (const unit of units) {
+    const joined = current === '' ? unit.text : current + pending + unit.text;
+
+    if (joined.length <= budget) {
+      current = joined;
+      pending = unit.separator;
+      continue;
+    }
+
+    if (current !== '') {
+      parts.push(current.trim());
+      current = '';
+      pending = '';
+    }
+
+    // Alone and still too long: hand it to the next level down.
+    if (unit.text.length > budget) {
+      const pieces = breakUp(unit.text);
+      parts.push(...pieces.slice(0, -1).map((piece) => piece.trim()));
+      current = pieces[pieces.length - 1] ?? '';
+    } else {
+      current = unit.text;
+    }
+    pending = unit.separator;
+  }
+
+  if (current.trim().length > 0) {
+    parts.push(current.trim());
+  }
+
+  return parts;
+}
+
+/**
+ * Breaks text at the strongest division that fits, falling back a level at a
+ * time: blank lines, then sentence ends, then single line breaks, then
+ * whitespace.
+ *
+ * Word boundaries alone cut sentences in half — the thing that makes a thread
+ * read badly — so they are now the last resort rather than the only rule. A
+ * blank line is the author saying "these belong apart"; a sentence end is the
+ * next place a reader expects to pause; a lone newline sits below both because
+ * it is so often just where the line happened to wrap.
+ */
+function splitByStructure(text: string, budget: number): string[] {
+  return packUnits(segmentParagraphs(text), budget, (paragraph) =>
+    packUnits(segmentSentences(paragraph), budget, (sentence) =>
+      packUnits(segmentLines(sentence), budget, (line) =>
+        splitAtWordBoundaries(line, budget)
+      )
+    )
+  );
+}
+
+/**
  * Splits over-long text into parts that each fit within MAX_TWEET_LENGTH *once
  * their numbering suffix is added*.
  *
@@ -95,7 +234,7 @@ export function splitThreadText(text: string, otherParts = 0): string[] {
 
   for (;;) {
     const budget = MAX_TWEET_LENGTH - suffixWidth(assumedTotal);
-    const chunks = splitAtWordBoundaries(trimmed, budget);
+    const chunks = splitByStructure(trimmed, budget);
     const total = otherParts + chunks.length;
 
     if (total <= assumedTotal) {

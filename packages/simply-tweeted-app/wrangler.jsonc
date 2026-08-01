@@ -30,10 +30,17 @@
 			"migrations_dir": "../../migrations"
 		}
 	],
+	// Workers AI, for the composer's "Split with AI" button. Inference runs on
+	// Cloudflare's GPUs — no API key, and the request never leaves the platform.
+	// `remote: true` points local `wrangler dev` at real inference, because there
+	// are no models in the local runtime.
+	"ai": {
+		"binding": "AI",
+		"remote": true
+	},
 	"observability": {
 		"enabled": true
 	}
 	// Secrets (wrangler secret put): AUTH_SECRET, DB_ENCRYPTION_KEY,
-	// AUTH_TWITTER_ID, AUTH_TWITTER_SECRET, ALLOWED_TWITTER_ACCOUNTS, and the
-	// optional ANTHROPIC_API_KEY (absent = the composer's AI split button 501s).
+	// AUTH_TWITTER_ID, AUTH_TWITTER_SECRET, ALLOWED_TWITTER_ACCOUNTS
 }

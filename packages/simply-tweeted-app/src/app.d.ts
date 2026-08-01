@@ -1,7 +1,7 @@
 // See https://kit.svelte.dev/docs/types#app
 // for information about these interfaces
 
-import type { D1Database } from '@cloudflare/workers-types';
+import type { Ai, D1Database } from '@cloudflare/workers-types';
 
 declare global {
 	namespace App {
@@ -16,6 +16,7 @@ declare global {
 		interface Platform {
 			env: {
 				DB: D1Database;
+				AI: Ai;
 			};
 			cf: CfProperties;
 			ctx: ExecutionContext;

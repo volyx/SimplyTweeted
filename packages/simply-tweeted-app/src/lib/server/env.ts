@@ -13,5 +13,3 @@ export const DB_ENCRYPTION_KEY = () => privateEnv.DB_ENCRYPTION_KEY || '';
 export const AUTH_TWITTER_ID = () => privateEnv.AUTH_TWITTER_ID || '';
 export const AUTH_TWITTER_SECRET = () => privateEnv.AUTH_TWITTER_SECRET || '';
 export const ALLOWED_TWITTER_ACCOUNTS = () => privateEnv.ALLOWED_TWITTER_ACCOUNTS || '';
-/** Optional. Absent just means the composer's AI split button is unavailable. */
-export const ANTHROPIC_API_KEY = () => privateEnv.ANTHROPIC_API_KEY || '';

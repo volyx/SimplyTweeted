@@ -7,6 +7,10 @@ import { log } from './logger.js';
 /**
  * Ceiling on X posts per cron invocation. Each post and each progress write is a
  * subrequest (free plan allows 50), and a thread costs 2n+2.
+ *
+ * Must stay >= MAX_THREAD_PARTS. A thread that cannot fit one run's budget is
+ * deferred whole rather than split across runs, so a longer maximum thread
+ * would be deferred every tick until it was abandoned.
  */
 const MAX_POSTS_PER_RUN = 15;
 

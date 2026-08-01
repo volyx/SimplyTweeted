@@ -11,7 +11,7 @@ https://github.com/user-attachments/assets/a221680c-684f-41ae-99dd-5b5624675ab4
 ## Features
 
 - **📅 Tweet Scheduling**: Plan your content in advance and let Simply Tweeted post it at the perfect time. **Support posting on communities**
-- **🧵 Threads**: Compose up to 10 parts; each is posted as a reply to the previous one with ` 1/n` numbering appended automatically
+- **🧵 Threads**: Compose up to 15 parts; each is posted as a reply to the previous one with ` 1/n` numbering appended automatically
 - **🔐 Authentication**: OAuth integration with X (Twitter) for secure access
 - **🔒 Token Security**: User tokens are encrypted and securely stored in the database
 - **📱 Responsive Design**: Works seamlessly on desktop and mobile devices
@@ -269,7 +269,7 @@ threads that would have posted fine. X's own responses are the signal instead: a
 (credits depleted) marks it `failed`. Both are logged with X's response body, and
 successful posts log `x-user-limit-24hour-remaining` when X sends it.
 
-**Limits.** `MAX_THREAD_PARTS = 10`, and `MAX_POSTS_PER_RUN = 15` per cron
+**Limits.** `MAX_THREAD_PARTS = 15`, and `MAX_POSTS_PER_RUN = 15` per cron
 invocation. The latter is about subrequests, not rate limits: every X post *and
 every D1 call* counts against a 50-subrequest cap on the free plan, and a thread
 costs `2n + 2`.

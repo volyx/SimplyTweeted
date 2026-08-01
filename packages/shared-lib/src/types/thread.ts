@@ -10,10 +10,20 @@
 export const MAX_TWEET_LENGTH = 280;
 
 /**
- * Upper bound on thread length. Also caps the per-invocation subrequest cost,
- * which is 2n+2 against a 50-subrequest limit on the Workers free plan.
+ * Upper bound on thread length.
+ *
+ * Two ceilings apply, and this is the lower of them. The subrequest cost is
+ * 2n+2 against a 50-subrequest limit on the Workers free plan, which would
+ * allow 24. The binding one is the scheduler: it defers a whole thread that
+ * does not fit a single run's MAX_POSTS_PER_RUN budget, so a thread longer
+ * than that budget would be deferred every tick and never post at all.
+ *
+ * Raised from 10 because 10 was too tight to split real prose without cutting
+ * sentences in half: 2,400 characters of it needs 11 parts to break only at
+ * sentence ends, and at 10 every part has to run 99% full, which forces a
+ * mid-sentence break no matter how good the splitter is.
  */
-export const MAX_THREAD_PARTS = 10;
+export const MAX_THREAD_PARTS = 15;
 
 /**
  * Appends the ` 1/3` enumeration. A single-part "thread" is just a tweet and

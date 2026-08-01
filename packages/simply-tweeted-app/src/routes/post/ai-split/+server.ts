@@ -137,6 +137,34 @@ function readParts(response: unknown): string[] {
 	return Array.isArray(parts) ? normalizeThreadParts(parts.map(String)) : [];
 }
 
+/**
+ * Packs consecutive parts together while they fit, to get under the thread's
+ * maximum length.
+ *
+ * The model over-splits — it returned 19 parts for a draft the thread can hold
+ * in 15 — because being told to prefer short clean parts pushes it towards one
+ * part per sentence. Rejecting that answer wasted a set of breaks that were all
+ * at sentence ends, and handed the user word boundaries instead.
+ *
+ * Merging is always safe in a way splitting is not: a part ending at a sentence
+ * boundary, joined to the next, still ends at one. This can only remove breaks,
+ * never introduce a bad one.
+ */
+function mergeToFit(parts: string[]): string[] {
+	const merged: string[] = [];
+
+	for (const part of parts) {
+		const previous = merged[merged.length - 1];
+		if (previous !== undefined && fits(`${previous} ${part}`, MAX_THREAD_PARTS)) {
+			merged[merged.length - 1] = `${previous} ${part}`;
+			continue;
+		}
+		merged.push(part);
+	}
+
+	return merged;
+}
+
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	const session = await locals.auth();
 	if (!session?.user) {
@@ -167,6 +195,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 	const ai = platform?.env?.AI;
 	if (!ai) {
+		log.error('AI split unavailable: no AI binding on platform.env');
 		return json(
 			{ error: 'The AI binding is unavailable. Run `wrangler dev` rather than `vite dev`.' },
 			{ status: 503 }
@@ -175,6 +204,10 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 	// Longer than the thread can hold however it is cut — no call is worth making.
 	if (text.length > room * PART_BUDGET) {
+		log.info('AI split skipped: text cannot fit the thread at any split', {
+			chars: text.length,
+			capacity: room * PART_BUDGET
+		});
 		return json({
 			parts: deterministic,
 			source: 'fallback',
@@ -257,7 +290,22 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	}
 	parts = repairedParts;
 
-	// Only length the thread cannot hold is unrecoverable.
+	// Too many parts is recoverable in the other direction: joining two parts that
+	// each end at a sentence boundary leaves a part that also ends at one, so
+	// merging can only ever remove breaks, never create a bad one.
+	if (otherParts + parts.length > MAX_THREAD_PARTS) {
+		const merged = mergeToFit(parts);
+		if (merged.length < parts.length) {
+			log.info('AI split returned more parts than the thread allows, merged them', {
+				before: parts.length,
+				after: merged.length,
+				max: MAX_THREAD_PARTS
+			});
+			parts = merged;
+		}
+	}
+
+	// Only length the thread still cannot hold is unrecoverable.
 	if (otherParts + parts.length > MAX_THREAD_PARTS) {
 		log.warn('AI split needed more parts than the thread allows', {
 			needed: otherParts + parts.length,

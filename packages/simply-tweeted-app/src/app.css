@@ -88,6 +88,24 @@ body {
   border: 1px solid var(--color-base-300);
 }
 
+/**
+ * Inside the timeline column, content sits directly on the surface.
+ *
+ * The column already has its own hairline sides, so a bordered card within it
+ * reads as a second frame drawn inside the first — a panel inside a panel,
+ * which is not how X looks. The right-hand Trends panel keeps its card border,
+ * because there it is genuinely a separate surface.
+ */
+main .card {
+  border: none;
+  background-color: transparent;
+}
+
+main .card-body {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* Its nav rows are oversized pills that fill on hover. */
 .menu :where(li > a),
 .menu :where(li > button) {

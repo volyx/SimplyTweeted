@@ -48,7 +48,7 @@
 	<meta name="description" content="View and manage your scheduled tweets" />
 </svelte:head>
 
-<div class="container mx-auto max-w-3xl px-4 py-8">
+<div class="py-2">
 	<h1 class="text-3xl font-bold mb-6">Your Scheduled Tweets</h1>
 
 	{#if data.tweets && data.tweets.length > 0}

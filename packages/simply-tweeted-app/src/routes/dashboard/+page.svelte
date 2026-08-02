@@ -15,7 +15,7 @@
 		: null;
 </script>
 
-<div class="container mx-auto p-6">
+<div class="py-2">
 	<div class="card bg-base-100 shadow-xl">
 		<div class="card-body">
 			<h2 class="card-title text-2xl">Welcome, {$page.data.session?.user?.name || 'User'}!</h2>

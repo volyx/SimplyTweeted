@@ -208,7 +208,7 @@
 	});
 </script>
 
-<div class="container mx-auto max-w-3xl py-8 px-4">
+<div class="py-2">
 	<h1 class="text-3xl font-bold mb-6">{parts.length > 1 ? 'Schedule a Thread' : 'Schedule a Tweet'}</h1>
 
 	<div class="card bg-base-200 shadow-xl">

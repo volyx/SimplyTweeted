@@ -15,7 +15,7 @@
 	<meta name="description" content="View your sent tweets history" />
 </svelte:head>
 
-<div class="container mx-auto max-w-3xl px-4 py-8">
+<div class="py-2">
 	<h1 class="text-3xl font-bold mb-6">Your Tweet History</h1>
 
 	{#if data.tweets && data.tweets.length > 0}

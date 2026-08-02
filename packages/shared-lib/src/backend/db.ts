@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { D1Database } from '@cloudflare/workers-types';
-import { TweetStatus, Tweet, UserAccount, PostHeadroom } from '../types/types.js';
+import { TweetStatus, Tweet, UserAccount, PostHeadroom, TrendingPost } from '../types/types.js';
 import { EncryptionService } from './encryption.js';
 
 /**
@@ -354,6 +354,80 @@ class DatabaseClient {
       resetAt: row.postsResetAt,
       observedAt: row.postsObservedAt
     };
+  }
+
+  /**
+   * Replaces the user's cached trends with a fresh snapshot.
+   *
+   * Delete-then-insert in one batch: a partial write would leave the sidebar
+   * mixing two fetches, and D1 batches are atomic.
+   */
+  async saveTrends(userId: string, posts: TrendingPost[]): Promise<void> {
+    const statements = [
+      this.db.prepare('DELETE FROM trends WHERE userId = ?1').bind(userId),
+      ...posts.map((post) =>
+        this.db
+          .prepare(
+            `INSERT INTO trends (id, userId, tweetId, authorName, authorUsername, text,
+                                 likeCount, retweetCount, replyCount, quoteCount, score,
+                                 postedAt, fetchedAt)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
+          )
+          .bind(
+            randomUUID(),
+            userId,
+            post.tweetId,
+            post.authorName,
+            post.authorUsername,
+            post.text,
+            post.likeCount,
+            post.retweetCount,
+            post.replyCount,
+            post.quoteCount,
+            post.score,
+            post.postedAt.getTime(),
+            post.fetchedAt.getTime()
+          )
+      )
+    ];
+
+    await this.withRetry('saveTrends', () => this.db.batch(statements));
+  }
+
+  /** The cached snapshot, best first. Empty until the user refreshes once. */
+  async getTrends(userId: string, limit = 10): Promise<TrendingPost[]> {
+    const result = await this.withRetry('getTrends', () =>
+      this.db
+        .prepare('SELECT * FROM trends WHERE userId = ?1 ORDER BY score DESC LIMIT ?2')
+        .bind(userId, limit)
+        .all<{
+          tweetId: string;
+          authorName: string;
+          authorUsername: string;
+          text: string;
+          likeCount: number;
+          retweetCount: number;
+          replyCount: number;
+          quoteCount: number;
+          score: number;
+          postedAt: number;
+          fetchedAt: number;
+        }>()
+    );
+
+    return (result.results ?? []).map((row) => ({
+      tweetId: row.tweetId,
+      authorName: row.authorName,
+      authorUsername: row.authorUsername,
+      text: row.text,
+      likeCount: row.likeCount,
+      retweetCount: row.retweetCount,
+      replyCount: row.replyCount,
+      quoteCount: row.quoteCount,
+      score: row.score,
+      postedAt: new Date(row.postedAt),
+      fetchedAt: new Date(row.fetchedAt)
+    }));
   }
 
   async getUserAccount(userId: string, provider: string): Promise<UserAccount | null> {

@@ -1,10 +1,44 @@
 <script lang="ts">
 	import '../app.css';
 	import { page, updated } from '$app/stores';
-	import { beforeNavigate } from '$app/navigation';
+	import { beforeNavigate, invalidateAll } from '$app/navigation';
 	import { signOut } from '@auth/sveltekit/client';
 
-	let { children } = $props();
+	let { children, data } = $props();
+
+	let refreshing = $state(false);
+	let refreshError: string | null = $state(null);
+
+	/**
+	 * The only place in the app that spends X credits, so it is a deliberate
+	 * click rather than anything automatic. The sidebar otherwise renders the
+	 * cached snapshot the layout load returns.
+	 */
+	async function refreshTrends() {
+		if (refreshing) return;
+		refreshing = true;
+		refreshError = null;
+		try {
+			const response = await fetch('/api/trends', { method: 'POST' });
+			const result = await response.json();
+			if (!response.ok) {
+				refreshError = result?.error ?? 'Could not refresh.';
+				return;
+			}
+			await invalidateAll();
+		} catch {
+			refreshError = 'Could not reach the server.';
+		} finally {
+			refreshing = false;
+		}
+	}
+
+	/** Compact counts, the way X renders them. */
+	function short(n: number): string {
+		if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+		if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+		return String(n);
+	}
 
 	/**
 	 * Survive a deploy that happens while the page is open.
@@ -47,7 +81,7 @@
 							</div>
 						</div>
 						<ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
-							<li><button on:click={() => signOut()} class="w-full text-left">Sign out</button></li>
+							<li><button onclick={() => signOut()} class="w-full text-left">Sign out</button></li>
 						</ul>
 					</div>
 				{:else}
@@ -59,6 +93,71 @@
 		<main class="flex-grow w-full max-w-2xl mx-auto border-x border-base-300 p-4">
 			{@render children()}
 		</main>
+
+		<aside class="hidden xl:block fixed right-0 top-0 w-80 h-screen overflow-y-auto p-4">
+			{#if data.session}
+				<div class="card bg-base-200">
+					<div class="card-body p-4">
+						<div class="flex items-center justify-between mb-2">
+							<h2 class="text-xl font-bold">Trends</h2>
+							<button
+								class="btn btn-sm btn-ghost"
+								disabled={refreshing}
+								title="Fetches from X — this spends API credits"
+								onclick={refreshTrends}
+							>
+								{#if refreshing}
+									<span class="loading loading-spinner loading-xs"></span>
+								{:else}
+									Refresh
+								{/if}
+							</button>
+						</div>
+
+						{#if refreshError}
+							<p class="text-sm text-error mb-2">{refreshError}</p>
+						{/if}
+
+						{#if data.trends.length === 0}
+							<p class="text-sm text-base-content/60">
+								Nothing yet. Refresh to pull the best-performing posts from the accounts you
+								follow — it spends X API credits, so it only runs when you ask.
+							</p>
+						{:else}
+							<p class="text-xs text-base-content/50 mb-2">
+								Best of what you follow · {new Date(data.trends[0].fetchedAt).toLocaleString()}
+							</p>
+							<ul class="flex flex-col">
+								{#each data.trends as post, i}
+									<li class="border-t border-base-300 py-3 first:border-t-0">
+										<a
+											href={`https://x.com/${post.authorUsername}/status/${post.tweetId}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											class="block hover:opacity-80"
+										>
+											<div class="flex items-baseline gap-2">
+												<span class="text-xs text-base-content/50">{i + 1}</span>
+												<span class="font-bold text-sm truncate">{post.authorName}</span>
+												<span class="text-xs text-base-content/50 truncate">
+													@{post.authorUsername}
+												</span>
+											</div>
+											<p class="text-sm mt-1 line-clamp-3">{post.text}</p>
+											<div class="flex gap-3 mt-2 text-xs text-base-content/50">
+												<span>{short(post.replyCount)} replies</span>
+												<span>{short(post.retweetCount)} reposts</span>
+												<span>{short(post.likeCount)} likes</span>
+											</div>
+										</a>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+				</div>
+			{/if}
+		</aside>
 
 		<footer class="footer footer-center p-4 bg-base-100 border-t border-base-300 text-base-content/60 text-sm">
 			<div>
@@ -154,7 +253,7 @@
 							</div>
 						</div>
 					</div>
-					<button on:click={() => signOut()} class="btn btn-outline btn-sm w-full gap-2">
+					<button onclick={() => signOut()} class="btn btn-outline btn-sm w-full gap-2">
 						<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
 						</svg>

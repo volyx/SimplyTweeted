@@ -63,101 +63,105 @@
 <div class="drawer lg:drawer-open">
 	<input id="my-drawer" type="checkbox" class="drawer-toggle" />
 	
-	<div class="drawer-content flex flex-col">
+	<div class="drawer-content flex flex-col min-h-screen">
 		<header class="navbar bg-base-100/80 backdrop-blur-md border-b border-base-300 sticky top-0 z-30">
 			<div class="navbar-start">
-				<label for="my-drawer" class="btn btn-square btn-ghost lg:hidden">
-					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-5 h-5 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+				<label for="my-drawer" class="btn btn-square btn-ghost lg:hidden" aria-label="Open menu">
+					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-5 h-5 stroke-current">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+					</svg>
 				</label>
-				<a href="/" class="btn btn-ghost text-xl">Simply Tweeted</a>
+				<a href="/" class="btn btn-ghost text-xl font-bold">Simply Tweeted</a>
 			</div>
 			<div class="navbar-end">
 				{#if $page.data.session}
-					<a href="/dashboard" class="btn btn-ghost">Dashboard</a>
+					<a href="/dashboard" class="btn btn-ghost btn-sm mr-2">Dashboard</a>
 					<div class="dropdown dropdown-end">
-						<div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar">
+						<div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar" aria-label="User menu">
 							<div class="w-10 rounded-full">
 								<img alt="User avatar" src={$page.data.session.user?.image || 'https://via.placeholder.com/40'} />
 							</div>
 						</div>
-						<ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
-							<li><button onclick={() => signOut()} class="w-full text-left">Sign out</button></li>
-						</ul>
+						<div class="dropdown-content menu menu-sm mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
+							<button onclick={() => signOut()} class="w-full text-left px-4 py-2 hover:bg-base-200 rounded-btn">Sign out</button>
+						</div>
 					</div>
 				{:else}
-					<a href="/login" class="btn btn-primary">Login</a>
+					<a href="/login" class="btn btn-primary btn-sm">Login</a>
 				{/if}
 			</div>
 		</header>
 
-		<main class="flex-grow w-full max-w-2xl mx-auto border-x border-base-300 p-4">
-			{@render children()}
-		</main>
+		<div class="flex-grow flex justify-center w-full">
+			<main class="w-full max-w-2xl border-x border-base-300 p-4">
+				{@render children()}
+			</main>
 
-		<aside class="hidden xl:block fixed right-0 top-0 w-80 h-screen overflow-y-auto p-4">
 			{#if data.session}
-				<div class="card bg-base-200">
-					<div class="card-body p-4">
-						<div class="flex items-center justify-between mb-2">
-							<h2 class="text-xl font-bold">Trends</h2>
-							<button
-								class="btn btn-sm btn-ghost"
-								disabled={refreshing}
-								title="Fetches from X — this spends API credits"
-								onclick={refreshTrends}
-							>
-								{#if refreshing}
-									<span class="loading loading-spinner loading-xs"></span>
-								{:else}
-									Refresh
-								{/if}
-							</button>
+				<aside class="hidden xl:block w-80 p-4">
+					<div class="card bg-base-200 sticky top-20">
+						<div class="card-body p-4">
+							<div class="flex items-center justify-between mb-2">
+								<h2 class="text-xl font-bold">Trends</h2>
+								<button
+									class="btn btn-sm btn-ghost"
+									disabled={refreshing}
+									title="Fetches from X — this spends API credits"
+									onclick={refreshTrends}
+								>
+									{#if refreshing}
+										<span class="loading loading-spinner loading-xs"></span>
+									{:else}
+										Refresh
+									{/if}
+								</button>
+							</div>
+
+							{#if refreshError}
+								<p class="text-sm text-error mb-2">{refreshError}</p>
+							{/if}
+
+							{#if data.trends.length === 0}
+								<p class="text-sm text-base-content/60">
+									Nothing yet. Refresh to pull the best-performing posts from the accounts you
+									follow — it spends X API credits, so it only runs when you ask.
+								</p>
+							{:else}
+								<p class="text-xs text-base-content/50 mb-2">
+									Best of what you follow · {new Date(data.trends[0].fetchedAt).toLocaleString()}
+								</p>
+								<ul class="flex flex-col">
+									{#each data.trends as post, i}
+										<li class="border-t border-base-300 py-3 first:border-t-0">
+											<a
+												href={`https://x.com/${post.authorUsername}/status/${post.tweetId}`}
+												target="_blank"
+												rel="noopener noreferrer"
+												class="block hover:opacity-80"
+											>
+												<div class="flex items-baseline gap-2">
+													<span class="text-xs text-base-content/50">{i + 1}</span>
+													<span class="font-bold text-sm truncate">{post.authorName}</span>
+													<span class="text-xs text-base-content/50 truncate">
+														@{post.authorUsername}
+													</span>
+												</div>
+												<p class="text-sm mt-1 line-clamp-3">{post.text}</p>
+												<div class="flex gap-3 mt-2 text-xs text-base-content/50">
+													<span>{short(post.replyCount)} replies</span>
+													<span>{short(post.retweetCount)} reposts</span>
+													<span>{short(post.likeCount)} likes</span>
+												</div>
+											</a>
+										</li>
+									{/each}
+								</ul>
+							{/if}
 						</div>
-
-						{#if refreshError}
-							<p class="text-sm text-error mb-2">{refreshError}</p>
-						{/if}
-
-						{#if data.trends.length === 0}
-							<p class="text-sm text-base-content/60">
-								Nothing yet. Refresh to pull the best-performing posts from the accounts you
-								follow — it spends X API credits, so it only runs when you ask.
-							</p>
-						{:else}
-							<p class="text-xs text-base-content/50 mb-2">
-								Best of what you follow · {new Date(data.trends[0].fetchedAt).toLocaleString()}
-							</p>
-							<ul class="flex flex-col">
-								{#each data.trends as post, i}
-									<li class="border-t border-base-300 py-3 first:border-t-0">
-										<a
-											href={`https://x.com/${post.authorUsername}/status/${post.tweetId}`}
-											target="_blank"
-											rel="noopener noreferrer"
-											class="block hover:opacity-80"
-										>
-											<div class="flex items-baseline gap-2">
-												<span class="text-xs text-base-content/50">{i + 1}</span>
-												<span class="font-bold text-sm truncate">{post.authorName}</span>
-												<span class="text-xs text-base-content/50 truncate">
-													@{post.authorUsername}
-												</span>
-											</div>
-											<p class="text-sm mt-1 line-clamp-3">{post.text}</p>
-											<div class="flex gap-3 mt-2 text-xs text-base-content/50">
-												<span>{short(post.replyCount)} replies</span>
-												<span>{short(post.retweetCount)} reposts</span>
-												<span>{short(post.likeCount)} likes</span>
-											</div>
-										</a>
-									</li>
-								{/each}
-							</ul>
-						{/if}
 					</div>
-				</div>
+				</aside>
 			{/if}
-		</aside>
+		</div>
 
 		<footer class="footer footer-center p-4 bg-base-100 border-t border-base-300 text-base-content/60 text-sm">
 			<div>
